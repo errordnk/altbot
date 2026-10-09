@@ -41,8 +41,8 @@ restart the client (or choose the addon on the character screen). The spell, que
 
 ## Quick start
 
-1. Log in with your master character. A small AltBot icon appears at the minimap; **click it** to show or hide the stats
-   board together with the action bar.
+1. Log in with your master character. A small AltBot icon appears at the minimap; **left click** shows or hides the
+   stats board together with the action bar, **right click** shows or hides the board only.
 2. On the action bar click the **Roster** button (the beast-taming icon). Type the bots' names into the text box, separated by
    spaces, and press **Save**:
    - `Kora Nora Xora` - three named bots;

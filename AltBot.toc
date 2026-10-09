@@ -1,8 +1,8 @@
 ## Interface: 30300
 ## Title: AltBot
-## Notes: Tracks playerbots typed into one textarea; Quest/Farm/Study mode radio switch controls behavior.
+## Notes: Lead a team of your own alt-bots (mod-playerbots): stats board, action bar, per-bot bags, armory, strategies, quests and spellbook.
 ## Author: dnk
-## Version: 0.1
+## Version: 0.1.22
 ## SavedVariables: AltBot_SavedVars
 
 AltBot.lua

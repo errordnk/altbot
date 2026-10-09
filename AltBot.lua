@@ -12710,7 +12710,7 @@ local function GetOrCreateSettingsFrame()
 
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("TOP", f, "TOP", 0, -16)
-    title:SetText("AltBot Settings")
+    title:SetText("AltBot Settings  v" .. (GetAddOnMetadata("AltBot", "Version") or "?"))
 
     local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
     closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -4, -4)

@@ -560,3 +560,8 @@ function ShowUIPanel(frame) end
 ---The master's native spellbook frame.
 ---@type table
 SpellBookFrame = nil
+
+---@param addon string
+---@param field string
+---@return string? value
+function GetAddOnMetadata(addon, field) end

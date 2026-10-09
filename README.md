@@ -22,7 +22,7 @@ command works when you type it to a bot by hand, the addon can send it.
 - [Requirements](#requirements) · [Installation](#installation) · [Quick start](#quick-start)
 - [The action bar](#the-action-bar) · [Modes](#modes) · [The stats board](#the-stats-board)
 - [Per-bot windows](#per-bot-windows) · [Settings and chat control](#settings-and-chat-control)
-- [Vendors](#vendors) · [Slash commands](#slash-commands) · [Saved data](#saved-data) · [Limitations](#limitations)
+- [Vendors](#vendors) · [Trainers](#trainers) · [Slash commands](#slash-commands) · [Saved data](#saved-data) · [Limitations](#limitations)
 - [Development](#development) · [Credits](#credits) · [License](#license)
 
 ## Requirements
@@ -120,7 +120,8 @@ Shift-click on an item, spell or quest puts its link into the chat.
 - **Bags** - the bot's inventory from its `items` reply. Left click does the action chosen in the footer (*Sell* or *Trade*,
   click the left or right half), right click opens a menu. The window supports **selling** (to a vendor the bot stands at),
   **trading** (item moves to you through a trade window), **equipping** (the bot puts the item on), **depositing to the guild bank**
-  and **destroying**, plus a Wowhead link; items can be dragged to reorder. Free slots come from `stats`.
+  and **destroying**, plus a Wowhead link; items can be dragged to reorder. Free slots come from `stats`. **These operations work in Quest mode only**: in
+  Farm mode the bags window is view-only (the exception is a bot you have *parked*, see [Modes](#modes)).
 - **Strategies** - the combat and non-combat forms in the style of CleanBot (dropdowns, checkboxes, a delay slider); changes
   are sent as `co ...` / `nc ...` and the window follows commands typed by hand too. Clicking the **master's** name opens the
   same form for the **whole group**: every change goes to all bots (the Role dropdown is disabled there; a checkbox that is
@@ -155,6 +156,14 @@ Click the gear on the action bar. At the top a small chart shows how much memory
 - In **Quest mode, with a bot in your target**, an item you click at the vendor is bought **for that bot** (`b <item link>`
   whispered to it, once per lot, with a coin sound): its gold and item count are updated at once and its real slot count
   follows from the next `stats`. Without a bot target the purchase is yours as usual.
+
+## Trainers
+
+Open any class or profession trainer window with the master and every tracked bot (not in Solo mode) is whispered `trainer`:
+the bots standing near that trainer learn what they can afford. The addon collects their replies and, when the **chat
+init** checkbox is on, prints one line per bot and skill - the skill, its cost and whether it was learned or is too
+expensive - or `nothing to learn`. This is triggered only by the master's own deliberate visit to a trainer, never by a bot
+merely standing near one, so the bots do not spend gold for no visible reason.
 
 ## Slash commands
 

@@ -98,7 +98,7 @@ saved and show `?` until their first reply.
 | name | strategy window | strategies of the **whole group** |
 | bags row | bags window | all bags |
 | XP % | quest log window | the native quest log |
-| level | spellbook window | - |
+| level | spellbook window | the native spellbook |
 | top row, the hourly XP gain `+N%` (Farm) | park / release the bot | - |
 
 **Moving members between groups:** drag a column by its **class icon** onto another group's frame. If that group has a free

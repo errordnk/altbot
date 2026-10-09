@@ -20,7 +20,7 @@ Everything goes through ordinary **whispers and group chat** - no server changes
 command works when you type it to a bot by hand, the addon can send it.
 
 - [Requirements](#requirements) · [Installation](#installation) · [Quick start](#quick-start)
-- [The action bar](#the-action-bar) · [Modes](#modes) · [The stats board](#the-stats-board)
+- [The action bar](#the-action-bar) · [Keyboard shortcuts](#keyboard-shortcuts) · [Modes](#modes) · [The stats board](#the-stats-board)
 - [Per-bot windows](#per-bot-windows) · [Settings and chat control](#settings-and-chat-control)
 - [Vendors](#vendors) · [Trainers](#trainers) · [Slash commands](#slash-commands) · [Saved data](#saved-data) · [Limitations](#limitations)
 - [Development](#development) · [Credits](#credits) · [License](#license)
@@ -74,6 +74,14 @@ Left to right (the first six only exist in Quest mode):
 
 Follow/Stay, the reaction and the mode are **account-wide**: whatever one master sets is what the next master logs in with,
 and the raid is put into that state once it has been formed.
+
+## Keyboard shortcuts
+
+Every action-bar button can be bound to a key: open the game's **Key Bindings** window (Esc → Key Bindings), find the
+**AltBot** section and assign keys to *Attack, Follow, Stay, Aggressive, Defensive, Passive, Quest Mode, Farm Mode, Solo Mode,
+Roster* and *Settings*, plus *Show / hide the board and the action bar* and *Show / hide the board*. A key does exactly what a
+click on the matching button does. The combat buttons (Attack, Follow, Stay, the three reactions) work in Quest mode only, as
+the buttons do. The bindings file is read when the client starts, so restart the game once after installing or updating.
 
 ## Modes
 

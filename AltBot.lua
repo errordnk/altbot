@@ -12532,6 +12532,60 @@ end)
 
 InitActionBarLayout()
 
+-- Keyboard shortcuts (Bindings.xml -> the standard "Key Bindings" window, section "AltBot"), per explicit user
+-- direction. Each action does exactly what a click on the matching bar button does; the combat row (attack,
+-- follow/stay, reactions) only exists in Quest mode, so the keys do nothing elsewhere.
+NS.ClickButton = function(btn)
+    local onClick = btn:GetScript("OnClick")
+    if onClick then onClick(btn, "LeftButton") end
+end
+NS.QuestOnly = function(fn)
+    return function()
+        if NS.EffectiveMode() == NS.MODE_QUEST then fn() end
+    end
+end
+NS.hotkeyActions = {
+    attack     = NS.QuestOnly(function() NS.ClickButton(attackBtn) end),
+    follow     = NS.QuestOnly(function() NS.ClickButton(movementBtns[1]) end),
+    stay       = NS.QuestOnly(function() NS.ClickButton(movementBtns[2]) end),
+    aggressive = NS.QuestOnly(function() NS.ClickButton(reactionBtns[1]) end),
+    defensive  = NS.QuestOnly(function() NS.ClickButton(reactionBtns[2]) end),
+    passive    = NS.QuestOnly(function() NS.ClickButton(reactionBtns[3]) end),
+    quest      = function() NS.ClickButton(modeBtns[1]) end,
+    farm       = function() NS.ClickButton(modeBtns[2]) end,
+    solo       = function() NS.ClickButton(disbandBtn) end,
+    roster     = function() NS.ClickButton(rosterBtn) end,
+    settings   = function() NS.ToggleSettings() end,
+    boardbar   = function()
+        local showBoth = not (NS.BoardAnyShown() or actionBar:IsShown())
+        NS.SetPanelShown(showBoth)
+        NS.SetActionBarShown(showBoth)
+    end,
+    board      = function() NS.TogglePanel() end,
+}
+
+--- Called by the bodies of the bindings in Bindings.xml.
+function AltBot_Hotkey(name)
+    local action = NS.hotkeyActions[name]
+    if action then action() end
+end
+
+-- The names shown in the Key Bindings window.
+BINDING_HEADER_ALTBOT = "AltBot"
+BINDING_NAME_ALTBOT_ATTACK = "Attack (Quest mode)"
+BINDING_NAME_ALTBOT_FOLLOW = "Follow (Quest mode)"
+BINDING_NAME_ALTBOT_STAY = "Stay (Quest mode)"
+BINDING_NAME_ALTBOT_AGGRESSIVE = "Aggressive (Quest mode)"
+BINDING_NAME_ALTBOT_DEFENSIVE = "Defensive (Quest mode)"
+BINDING_NAME_ALTBOT_PASSIVE = "Passive (Quest mode)"
+BINDING_NAME_ALTBOT_QUEST = "Quest Mode"
+BINDING_NAME_ALTBOT_FARM = "Farm Mode"
+BINDING_NAME_ALTBOT_SOLO = "Solo Mode"
+BINDING_NAME_ALTBOT_ROSTER = "Roster"
+BINDING_NAME_ALTBOT_SETTINGS = "Settings"
+BINDING_NAME_ALTBOT_BOARDBAR = "Show / hide the board and the action bar"
+BINDING_NAME_ALTBOT_BOARD = "Show / hide the board"
+
 --- Highlights the active reaction + mode buttons, then reflows visibility
 --- (see ReflowActionBar - the first 6 buttons only show in Summon mode).
 --- Called on reaction/movement/mode changes and whenever the bar is

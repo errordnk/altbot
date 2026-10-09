@@ -1,0 +1,15 @@
+<Bindings>
+	<Binding name="ALTBOT_ATTACK" header="ALTBOT">AltBot_Hotkey("attack")</Binding>
+	<Binding name="ALTBOT_FOLLOW">AltBot_Hotkey("follow")</Binding>
+	<Binding name="ALTBOT_STAY">AltBot_Hotkey("stay")</Binding>
+	<Binding name="ALTBOT_AGGRESSIVE">AltBot_Hotkey("aggressive")</Binding>
+	<Binding name="ALTBOT_DEFENSIVE">AltBot_Hotkey("defensive")</Binding>
+	<Binding name="ALTBOT_PASSIVE">AltBot_Hotkey("passive")</Binding>
+	<Binding name="ALTBOT_QUEST">AltBot_Hotkey("quest")</Binding>
+	<Binding name="ALTBOT_FARM">AltBot_Hotkey("farm")</Binding>
+	<Binding name="ALTBOT_SOLO">AltBot_Hotkey("solo")</Binding>
+	<Binding name="ALTBOT_ROSTER">AltBot_Hotkey("roster")</Binding>
+	<Binding name="ALTBOT_SETTINGS">AltBot_Hotkey("settings")</Binding>
+	<Binding name="ALTBOT_BOARDBAR">AltBot_Hotkey("boardbar")</Binding>
+	<Binding name="ALTBOT_BOARD">AltBot_Hotkey("board")</Binding>
+</Bindings>

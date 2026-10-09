@@ -2,7 +2,7 @@
 ## Title: AltBot
 ## Notes: Lead a team of your own alt-bots (mod-playerbots): stats board, action bar, per-bot bags, armory, strategies, quests and spellbook.
 ## Author: dnk
-## Version: 0.1.22
+## Version: 0.1.23
 ## SavedVariables: AltBot_SavedVars
 
 AltBot.lua

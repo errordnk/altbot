@@ -161,7 +161,7 @@ Click the gear on the action bar. At the top a small chart shows how much memory
 
 Open **any** trainer window with the master - a class trainer or a profession trainer - and every tracked bot (not in Solo
 mode) is whispered `trainer`: each bot learns what it can afford from that trainer, **wherever it is**, even on another
-continent (it does not have to be near the trainer or near you). The addon collects their replies and, when the **chat
+continent (it does not have to be near you). The addon collects their replies and, when the **chat
 init** checkbox is on, prints one line per bot and skill - the skill, its cost and whether it was learned or is too
 expensive - or `nothing to learn`. This is triggered only by the master's own deliberate visit to a trainer, never by a bot
 merely standing near one, so the bots do not spend gold for no visible reason.

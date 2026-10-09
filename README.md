@@ -119,8 +119,8 @@ Shift-click on an item, spell or quest puts its link into the chat.
   chat replies, not by inspecting it. Only the 3D model needs the bot in view once per session.
 - **Bags** - the bot's inventory from its `items` reply. Left click does the action chosen in the footer (*Sell* or *Trade*,
   click the left or right half), right click opens a menu. The window supports **selling** (to a vendor the bot stands at),
-  **trading** (item moves to you through a trade window), **depositing to the guild bank** and **destroying**, plus a Wowhead
-  link; items can be dragged to reorder. Free slots come from `stats`.
+  **trading** (item moves to you through a trade window), **equipping** (the bot puts the item on), **depositing to the guild bank**
+  and **destroying**, plus a Wowhead link; items can be dragged to reorder. Free slots come from `stats`.
 - **Strategies** - the combat and non-combat forms in the style of CleanBot (dropdowns, checkboxes, a delay slider); changes
   are sent as `co ...` / `nc ...` and the window follows commands typed by hand too. Clicking the **master's** name opens the
   same form for the **whole group**: every change goes to all bots (the Role dropdown is disabled there; a checkbox that is

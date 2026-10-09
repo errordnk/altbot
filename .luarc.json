@@ -1,0 +1,9 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+  "runtime.version": "Lua 5.1",
+  "workspace.library": ["./wow-stubs"],
+  "workspace.checkThirdParty": false,
+  "diagnostics.globals": ["AltBot_SavedVars"],
+  "diagnostics.disable": ["lowercase-global", "duplicate-set-field"],
+  "format.enable": false
+}

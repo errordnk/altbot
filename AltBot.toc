@@ -1,0 +1,8 @@
+## Interface: 30300
+## Title: AltBot
+## Notes: Tracks playerbots typed into one textarea; Quest/Farm/Study mode radio switch controls behavior.
+## Author: dnk
+## Version: 0.1
+## SavedVariables: AltBot_SavedVars
+
+AltBot.lua

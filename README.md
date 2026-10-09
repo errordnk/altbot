@@ -106,9 +106,12 @@ Shift-click on an item, spell or quest puts its link into the chat.
 - **Armory** - a native-style paper doll built from per-slot queries (`who` plus one query per slot, about 20 whispers),
   with the model, GearScore, iLevel, spec and talents. Closing it while a query is in flight is "fictive": it turns
   invisible and really closes when the last query is answered, so the trade window the bot opens is still suppressed.
+  It works **at any distance**: the bot does not have to be near you (or even in view), because everything is read from its
+  chat replies, not by inspecting it. Only the 3D model needs the bot in view once per session.
 - **Bags** - the bot's inventory from its `items` reply. Left click does the action chosen in the footer (*Sell* or *Trade*,
-  click the left or right half), right click opens a menu (trade, sell, deposit to guild bank, destroy, Wowhead link),
-  items can be dragged to reorder. Free slots come from `stats`.
+  click the left or right half), right click opens a menu. The window supports **selling** (to a vendor the bot stands at),
+  **trading** (item moves to you through a trade window), **depositing to the guild bank** and **destroying**, plus a Wowhead
+  link; items can be dragged to reorder. Free slots come from `stats`.
 - **Strategies** - the combat and non-combat forms in the style of CleanBot (dropdowns, checkboxes, a delay slider); changes
   are sent as `co ...` / `nc ...` and the window follows commands typed by hand too. Clicking the **master's** name opens the
   same form for the **whole group**: every change goes to all bots (the Role dropdown is disabled there; a checkbox that is

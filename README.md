@@ -82,7 +82,7 @@ and the raid is put into that state once it has been formed.
 - **Farm** - the bots grind on their own (`nc +new rpg,-follow`). Every 30 s each bot is asked for `stats` and `rpg status`;
   a bot that is not grinding is sent grinding again. A bot with **full bags** is summoned, sells (`s *`, or `s vendor` if the
   *sell vendor* setting is on) and is sent exploring again; a **dead** bot is revived by a summon. Clicking the top row of a
-  bot's column **parks** it next to you (summon, reset, sell) and clicking again puts it back to work.
+  bot's column (the line with the hourly XP gain, e.g. `+2%`) **parks** it next to you (summon, reset, sell) and clicking again puts it back to work.
 
 ## The stats board
 
@@ -99,7 +99,7 @@ saved and show `?` until their first reply.
 | bags row | bags window | all bags |
 | XP % | quest log window | the native quest log |
 | level | spellbook window | - |
-| top row (Farm) | park / release the bot | - |
+| top row, the hourly XP gain `+N%` (Farm) | park / release the bot | - |
 
 **Moving members between groups:** drag a column by its **class icon** onto another group's frame. If that group has a free
 place the member moves there; if it is full, drop onto a member to swap places. (Needs raid leader or assistant.) While

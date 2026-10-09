@@ -39,6 +39,6 @@ repository).
 ## Data credits
 
 - Spell/talent-tree tables: Wowhead (WotLK Classic).
-- Quest titles and quest zones: the QuestChromeCraft addon data; zone names and their Russian translations: the Questie
-  addon's tables.
+- Quest titles and quest zones: generated from the data of the author's own QuestChromeCraft addon.
+- Zone names and their Russian translations: the Questie addon's tables.
 - `playerbot.txt` is a Russian translation of the mod-playerbots configuration file, kept for reference.

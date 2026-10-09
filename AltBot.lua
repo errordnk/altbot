@@ -3382,6 +3382,7 @@ NS.GetBoardFrame = function(idx)
 
     f = CreateFrame("Frame", "AltBotBoard" .. idx, UIParent)
     f.idx = idx
+    f:SetScale(((AltBot_SavedVars and AltBot_SavedVars.boardScale) or 100) / 100)
     f.columns = {}
     f:SetSize(COL_WIDTH + COL_MARGIN * 2, ROW_HEIGHT * 6 + ICON_SIZE + TOP_PAD + COL_MARGIN * 2)
     f:SetMovable(true)
@@ -12586,6 +12587,18 @@ end
 
 local settingsFrame
 
+-- Two sliders of the settings window (per explicit user direction): the polling interval of every bot
+-- (default 30 s, 10..100) and the scale of the board frames (default 100 %, 50..150).
+NS.POLL_INTERVAL_DEFAULT = 30
+NS.ApplyPollInterval = function(seconds)
+    NS.POLL_INTERVAL = seconds
+    if #NS.rosterOrder > 0 then NS.STAGGER_DELAY = seconds / #NS.rosterOrder end
+end
+NS.ApplyBoardScale = function()
+    local scale = ((AltBot_SavedVars and AltBot_SavedVars.boardScale) or 100) / 100
+    for _, f in pairs(NS.boardFrames) do f:SetScale(scale) end
+end
+
 -- Memory of the addon itself: measured at the start and then several times an hour (every 5 minutes), one bar
 -- per hour showing the average of its measurements (per explicit user direction), drawn as a bar chart at the top of the settings window - every sample one bar, the
 -- bars sharing the window's width (a lone start bar fills it all, two bars half each, ten bars a tenth).
@@ -12719,6 +12732,42 @@ local function GetOrCreateSettingsFrame()
     f.avgText:Hide()
     f:SetScript("OnShow", function() NS.PaintMemChart() end)
 
+    -- Two sliders under the chart: the polling interval and the board scale.
+    local function MakeSlider(name, x, label, minV, maxV, current, format, onChange)
+        local slider = CreateFrame("Slider", name, f, "OptionsSliderTemplate")
+        slider:SetWidth(2 * COL_W - 24)
+        slider:SetHeight(17)
+        slider:SetPoint("TOPLEFT", f, "TOPLEFT", x + 6, -(40 + CHART_H + 26))
+        slider:SetMinMaxValues(minV, maxV)
+        slider:SetValueStep(1)
+        _G[name .. "Low"]:SetText(tostring(minV))
+        _G[name .. "High"]:SetText(tostring(maxV))
+        local text = _G[name .. "Text"]
+        text:SetText(string.format(format, current))
+        slider.silent = true
+        slider:SetValue(current)
+        slider.silent = false
+        slider:SetScript("OnValueChanged", function(self, value)
+            if self.silent then return end
+            value = math.floor(value + 0.5)
+            text:SetText(string.format(format, value))
+            onChange(value)
+        end)
+        return slider
+    end
+    MakeSlider("AltBotPollSlider", 16, "Poll interval", 10, 100,
+        (AltBot_SavedVars and AltBot_SavedVars.pollInterval) or NS.POLL_INTERVAL_DEFAULT, "Poll interval: %d s",
+        function(v)
+            AltBot_SavedVars.pollInterval = v
+            NS.ApplyPollInterval(v)
+        end)
+    MakeSlider("AltBotScaleSlider", 16 + 2 * COL_W, "Board scale", 50, 150,
+        (AltBot_SavedVars and AltBot_SavedVars.boardScale) or 100, "Board scale: %d%%",
+        function(v)
+            AltBot_SavedVars.boardScale = v
+            NS.ApplyBoardScale()
+        end)
+
     -- The checkboxes: "sell vendor", one per chat category, "del cache" LAST.
     local items = {}
     items[#items + 1] = { label = "sell vendor",
@@ -12750,7 +12799,7 @@ local function GetOrCreateSettingsFrame()
         get = function() return AltBot_SavedVars and AltBot_SavedVars.delCache or false end,
         set = function(v) AltBot_SavedVars.delCache = v end }
 
-    local gridTop = 40 + CHART_H + 8
+    local gridTop = 40 + CHART_H + 8 + 48   -- (the sliders sit between the chart and the checkboxes)
     for i, item in ipairs(items) do
         local col, row = (i - 1) % COLS, math.floor((i - 1) / COLS)
         local cb = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate")
@@ -12956,6 +13005,7 @@ loader:SetScript("OnEvent", function(self, event, addonName)
         -- Last "who" data per bot (armory header), kept the same way.
         AltBot_SavedVars.botWho = AltBot_SavedVars.botWho or {}
         NS.botWho = AltBot_SavedVars.botWho
+        NS.ApplyPollInterval(AltBot_SavedVars.pollInterval or NS.POLL_INTERVAL_DEFAULT)
         if AltBot_SavedVars.minimapAngle then
             PositionMinimapIcon(AltBot_SavedVars.minimapAngle)
         end

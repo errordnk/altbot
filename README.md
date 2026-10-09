@@ -137,7 +137,9 @@ Shift-click on an item, spell or quest puts its link into the chat.
 ## Settings and chat control
 
 Click the gear on the action bar. At the top a small chart shows how much memory the addon itself uses (a measurement every
-5 minutes, one bar per hour with the hourly average). Below are the checkboxes:
+5 minutes, one bar per hour with the hourly average). Under the chart are two sliders: **Poll interval** (10-100 s,
+default 30; how often every bot is asked for `stats`, `rpg status` and `items`) and **Board scale** (50-150 %, default
+100). Below are the checkboxes:
 
 - **sell vendor** - sell with `s vendor` instead of `s *`.
 - **chat init / stats / farm / inventory / armory / strategies / questlog / spellbook** - by default **nothing** the addon

@@ -42,3 +42,7 @@ repository).
 - Quest titles and quest zones: generated from the data of the author's own QuestChromeCraft addon.
 - Zone names and their Russian translations: the Questie addon's tables.
 - `playerbot.txt` is a Russian translation of the mod-playerbots configuration file, kept for reference.
+
+## License
+
+[MIT](LICENSE). The embedded data tables come from the sources above and keep their own terms.

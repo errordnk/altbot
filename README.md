@@ -2,10 +2,17 @@
 
 **English** | [Русский](прочтименя.md)
 
-AltBot is a World of Warcraft **3.3.5a (WotLK)** addon that lets one character - the *master* - run a whole raid of
-[mod-playerbots](https://github.com/liyunfan1223/mod-playerbots) bots on an AzerothCore server. It adds a stats board, an
-action bar and a set of per-bot windows (bags, armory, strategies, quests, spellbook) and takes care of forming the raid,
-polling the bots, unloading their bags, reviving them and so on.
+AltBot is a World of Warcraft **3.3.5a (WotLK)** addon for playing with [mod-playerbots](https://github.com/liyunfan1223/mod-playerbots)
+bots on an AzerothCore server.
+
+Most playerbots addons are built around **running raids with wild (random) bots**. AltBot is built around something else:
+**questing and levelling with your own altbots** - named characters of yours that you keep, know and look after. One
+character, the *master*, leads them; the addon gives you a stats board, an action bar and a set of per-bot windows (bags,
+armory, strategies, quests, spellbook) and takes care of forming the raid, polling the bots, unloading their bags,
+reviving them and so on. That focus shows: the quest log compares the quests of the whole team, the armory and bags let you
+look after each altbot separately, Farm mode keeps a levelling team busy on its own. Wild bots work perfectly well too -
+type a class word into the roster and the addon recruits and tracks them like any other bot (only their data is not kept
+between sessions).
 
 Everything goes through ordinary **whispers and group chat** - no server changes and no extra bridge addon are needed. If a
 command works when you type it to a bot by hand, the addon can send it.

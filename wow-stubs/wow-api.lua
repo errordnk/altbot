@@ -552,3 +552,11 @@ function GetMerchantItemInfo(index) end
 ---Plays a sound file from the game's data.
 ---@param path string
 function PlaySoundFile(path) end
+
+---Shows a standard UI panel window (the counterpart of HideUIPanel).
+---@param frame table
+function ShowUIPanel(frame) end
+
+---The master's native spellbook frame.
+---@type table
+SpellBookFrame = nil

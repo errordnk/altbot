@@ -3775,11 +3775,18 @@ local function FillMasterColumn(f)
     -- (per explicit user direction). Talents will go on the level row once talent control
     -- of bots is figured out.
     wire(f.nameBtn, "Group strategy (applies to all bots)", function() NS.ToggleGroupStrategy() end)
-    wire(f.xpBtn, "Quest log", function() ToggleQuestLog() end)
+    -- Level row: the master's own native spellbook
+    wire(f.lvlBtn, "Spellbook", function()
+        if SpellBookFrame:IsShown() then HideUIPanel(SpellBookFrame) else ShowUIPanel(SpellBookFrame) end
+    end)
+    wire(f.xpBtn, "Quest log", function()
+        -- this client has no ToggleQuestLog(): open/close the native frame itself
+        if QuestLogFrame:IsShown() then HideUIPanel(QuestLogFrame) else ShowUIPanel(QuestLogFrame) end
+    end)
     f.xpGainBtn:SetScript("OnClick", nil)
     f.xpGainBtn:SetScript("OnEnter", nil)
     f.xpGainBtn:SetScript("OnLeave", nil)
-    f.lvlBtn:Hide()
+    f.lvlBtn:Show()
 
     if entry.xpHourBase and entry.xpPercent then
         local gain = math.max(0, entry.xpPercent - entry.xpHourBase) + (entry.xpHourCarry or 0)
@@ -12844,7 +12851,7 @@ local minimapIcon = CreateFrame("Button", "AltBotMinimapIcon", Minimap)
 minimapIcon:SetSize(31, 31)
 minimapIcon:SetFrameStrata("MEDIUM")
 minimapIcon:SetFrameLevel(8)
-minimapIcon:RegisterForClicks("LeftButtonUp")
+minimapIcon:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 minimapIcon:RegisterForDrag("LeftButton")
 
 local iconTexture = minimapIcon:CreateTexture(nil, "BACKGROUND")
@@ -12891,11 +12898,15 @@ end)
 
 -- Click: toggles BOTH the stats board and the action bar together - per explicit user
 -- direction ("клик по иконке открывает/закрывает табло и экшенбар"); no right-click
--- (settings are opened by the gear on the action bar). NOT two independent toggles:
+-- (settings are opened by the gear on the action bar). Right click: only the board. NOT two independent toggles:
 -- NS.TogglePanel()/NS.ToggleActionBar() each flip their OWN saved flag, so if the two ever
 -- drifted out of sync a click would show one and hide the other. Decide a single target
 -- state from whether EITHER is visible, then force both to it.
-minimapIcon:SetScript("OnClick", function()
+minimapIcon:SetScript("OnClick", function(self, button)
+    if button == "RightButton" then
+        NS.TogglePanel()   -- right click: the stats board only
+        return
+    end
     local showBoth = not (NS.BoardAnyShown() or actionBar:IsShown())
     NS.SetPanelShown(showBoth)
     NS.SetActionBarShown(showBoth)
@@ -12904,7 +12915,8 @@ end)
 minimapIcon:SetScript("OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_LEFT")
     GameTooltip:SetText("AltBot", 1, 1, 1)
-    GameTooltip:AddLine("Click: stats board + action bar.", 1, 1, 1)
+    GameTooltip:AddLine("Left click: stats board + action bar.", 1, 1, 1)
+    GameTooltip:AddLine("Right click: stats board only.", 1, 1, 1)
     GameTooltip:Show()
 end)
 minimapIcon:SetScript("OnLeave", function() GameTooltip:Hide() end)

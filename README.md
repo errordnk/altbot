@@ -2,6 +2,8 @@
 
 **English** | [Русский](прочтименя.md)
 
+![AltBot: the stats board and the action bar](altbot.png)
+
 AltBot is a World of Warcraft **3.3.5a (WotLK)** addon for playing with [mod-playerbots](https://github.com/liyunfan1223/mod-playerbots)
 bots on an AzerothCore server.
 

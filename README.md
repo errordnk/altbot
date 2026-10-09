@@ -33,9 +33,8 @@ dependencies.
 table. Checks used: `luac -p AltBot.lua` and the Lua language server (`.luarc.json`, stubs for the WoW API in
 `wow-stubs/wow-api.lua`). The addon cannot be run outside the game client.
 
-`tools/` regenerates the embedded data (they are one-off scripts, see their headers):
-- `spelltabs_parse.py` / `spelltabs_generate.py`: class spell -> talent tree, from Wowhead's WotLK ability and talent lists.
-- `questzone_generate.py`: quest id -> zone id and Russian quest titles, from the QuestChromeCraft addon's data.
+The embedded data tables are generated offline from the sources listed below (the generator scripts are not part of this
+repository).
 
 ## Data credits
 

@@ -191,8 +191,9 @@ do not spend gold for no visible reason.
 
 ## Slash commands
 
-Only two diagnostic helpers: `/abfocus` (then point at some UI within 4 seconds - prints the frame under the cursor) and
-`/abglobals Prefix` (lists global tables whose names start with Prefix).
+Only three diagnostic helpers: `/abfocus` (then point at some UI within 4 seconds - prints the frame under the cursor),
+`/abglobals Prefix` (lists global tables whose names start with Prefix) and `/abevent` (for 2 minutes describes every chat line
+containing "in combat" together with the chat event it came by).
 
 ## Saved data
 

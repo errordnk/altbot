@@ -396,6 +396,7 @@ UIErrorsFrame = nil
 ---Localized "Trade cancelled." system string.
 ---@type string
 ERR_TRADE_CANCELLED = nil
+ERR_TRADE_COMPLETE = nil
 
 ---Maps class tokens to localized female class names.
 ---@type table<string, string>
@@ -565,3 +566,26 @@ SpellBookFrame = nil
 ---@param field string
 ---@return string? value
 function GetAddOnMetadata(addon, field) end
+
+---@param unit UnitId|string
+---@return boolean? -- true/1 while the unit is in combat
+function UnitAffectingCombat(unit) end
+
+---@return function
+function geterrorhandler() end
+---@param handler function
+function seterrorhandler(handler) end
+---@param format string
+---@param time? number
+---@return string
+function date(format, time) end
+
+---@type table
+AltBotNS = nil
+
+---@param slot number
+---@return string? name, string? texture, number? count
+function GetTradePlayerItemInfo(slot) end
+---@param slot number
+---@return string? name, string? texture, number? count
+function GetTradeTargetItemInfo(slot) end

@@ -91,6 +91,8 @@
 
 local ADDON_NAME = ...
 local NS = {}
+AltBotNS = NS   -- exposed so a separate recorder addon (AltBotRec, local, not shipped) can look inside
+NS.Trace = function(_kind, _text) end   -- replaced by that recorder when it is installed
 
 -- ============================================================
 -- Config (tunable)
@@ -2898,7 +2900,7 @@ local function classifyOutgoing(msg)
     if msg == "reset botAI" then return "init" end
     if msg:match("^nc%s") or msg:match("^co%s") or msg:match("^ll%s") then return "strategies" end
     if strfind(msg, "^rpg status") or msg == "summon" or msg == "s *" or msg == "s vendor"
-        or strfind(msg, "^cast Find ") then
+        or strfind(msg, "^cast Find ") or msg:match("^cast Call Pet") or msg:match("^cast Dismiss Pet") then
         return "farm"
     end
     if msg == "items" or msg:match("^s%s") or msg:match("^t%s") or msg:match("^e%s")
@@ -3016,6 +3018,12 @@ local function filterSystemLine(_, _, msg)
     local tradedWith = msg:match("^Вы предложили (%S+) обмен")
     if tradedWith and IsTrackedBotName(strlower(tradedWith)) and not NS.ChatShown("inventory") then
         return true
+    end
+    -- the bots' own error lines ("Kora: I am in combat"): "init"
+    do
+        -- (the server colours these lines itself: |cffffff00Kora|r|cffff0000: I am in combat|r - strip that first)
+        local who = NS.CleanEscapes(msg):match("^([^:]+): ")
+        if who and not NS.ChatShown("init") and IsTrackedBotName(strlower(who)) then return true end
     end
     -- what the addon's own actions cause: bots joining/leaving the group, the loot method change
     if not NS.ChatShown("init") and NS.IsAddonGroupLine(msg) then return true end
@@ -3244,6 +3252,13 @@ NS.ToggleFarmHold = function(key)
         NS.SendBotChain(entry.name, {
             NS.SummonStep(entry),
             NS.ResetStep(),
+            -- A hunter is parked WITHOUT his pet (per explicit user direction): a pet in a fight runs back to it
+            -- after the summon and the hunter follows it, so the pet is dismissed ("cast Dismiss Pet") and called
+            -- again when the bot is freed (see below). Plain text, as typed by hand.
+            { cmd = function()
+                if entry.class == "HUNTER" then return "cast Dismiss Pet" end
+                return nil
+            end },
             sellSteps[1],   -- sell, then "stats" only if something was sold
             sellSteps[2],
         }, {
@@ -3263,6 +3278,11 @@ NS.ToggleFarmHold = function(key)
         -- Back to Farm must be verified (strategy confirmed via "nc ?").
         NS.SendBotChain(entry.name, {
             NS.FarmStrategyStep(),
+            -- a hunter gets his pet back first
+            { cmd = function()
+                if entry.class == "HUNTER" then return "cast Call Pet" end
+                return nil
+            end },
             { cmd = "rpg status wander random" },
         }, {
             onFail = function(failedCmd)
@@ -4502,14 +4522,47 @@ local function PaintBagsFrame(botName, items, bagTotal, bagFree, money)
     local shownRows = math.max(1, math.ceil(shownSlots / BAGS_COLS))
     f:SetHeight(40 + shownRows * (ITEM_CELL_SIZE + ITEM_CELL_PAD) - ITEM_CELL_PAD + 30)
 
+    -- The cache keeps ONE entry per item (as the server lists them); the window shows what the bag really holds: an
+    -- item whose stack limit we know (NS.StackLimit) is split into as many stacks as that limit gives, each one
+    -- taking a cell, so the occupied slots match the server's own count (per explicit user direction). `src` is
+    -- the cache index every cell belongs to (all stacks of an item move together when dragged).
+    local display, maxIndex = {}, 0
+    for idx in pairs(items) do
+        if idx > maxIndex then maxIndex = idx end
+    end
+    for idx = 1, maxIndex do
+        local it = items[idx]
+        if it then
+            local limit = NS.StackLimit(it.link)
+            local count = it.count or 1
+            if limit and count > limit then
+                local left = count
+                while left > 0 do
+                    local part = math.min(limit, left)
+                    display[#display + 1] = { link = it.link, count = part, src = idx }
+                    left = left - part
+                end
+            else
+                display[#display + 1] = { link = it.link, count = count, src = idx }
+            end
+        else
+            display[#display + 1] = { src = idx }   -- a hole
+        end
+    end
+    local displayLen = #display
+
     for i, cell in ipairs(f.cells) do
-        local item = items[i]
+        local d = display[i]
+        local item = d and d.link and d or nil
+        -- the cache index this cell stands for (the free cells after the last item continue the numbering)
+        cell.slotIndex = d and d.src or (maxIndex + (i - displayLen))
         if item then
             local itemId = item.link:match("item:(%d+)")
             cell.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
             cell.icon:SetTexture(itemId and GetItemIcon(tonumber(itemId)) or nil)
             cell.icon:Show()
             cell.itemLink = item.link
+            cell.stackCount = item.count   -- what THIS cell holds (a stack of a split item)
             if item.count > 1 then
                 cell.countText:SetText(item.count)
                 cell.countText:Show()
@@ -4528,6 +4581,7 @@ local function PaintBagsFrame(botName, items, bagTotal, bagFree, money)
             cell.icon:SetTexture("Interface\\PaperDoll\\UI-Backpack-EmptySlot")
             cell.icon:Show()
             cell.itemLink = nil
+            cell.stackCount = nil
             cell.countText:Hide()
             NS.ApplyItemBorder(cell, nil)
             if i <= shownSlots then
@@ -4556,7 +4610,7 @@ local function PaintBagsFrame(botName, items, bagTotal, bagFree, money)
     if bagTotal then
         local occupied = 0
         for i = 1, bagTotal do
-            if items[i] then occupied = occupied + 1 end
+            if display[i] and display[i].link then occupied = occupied + 1 end
         end
         f.slotLabel:SetText((bagTotal - occupied) .. "/" .. bagTotal)
     else
@@ -4587,7 +4641,7 @@ local bagsDrag = nil   -- { f = frame, fromIndex = number, link = string } | nil
 NS.BeginBagsCellDrag = function(cell)
     local f = cell:GetParent()
     if not f or not f.botName then return end
-    bagsDrag = { f = f, fromIndex = cell.slotIndex, link = cell.itemLink }
+    bagsDrag = { f = f, fromIndex = cell.slotIndex, link = cell.itemLink, cell = cell }
     cell.icon:SetDesaturated(true)
     local itemId = strmatch(cell.itemLink, "item:(%d+)")
     SetCursor(GetItemIcon(tonumber(itemId) or 0))
@@ -4613,7 +4667,7 @@ NS.EndBagsCellDrag = function(cell)
     -- Undim the source cell's icon regardless of outcome — PaintBagsFrame
     -- (called below on a successful swap) would also reset this, but a
     -- cancelled/invalid drop never reaches that repaint otherwise.
-    local sourceCell = drag.f.cells[drag.fromIndex]
+    local sourceCell = drag.cell   -- (a cell is no longer at position slotIndex: stacks take several cells)
     if sourceCell then sourceCell.icon:SetDesaturated(false) end
 
     local target = GetMouseFocus()
@@ -5046,8 +5100,20 @@ end
 --- lately) and runs the ammo/poison check on the result. Skipped while a
 --- fetch for the bot is already collecting (e.g. its bags window just
 --- opened/closed) — never doubles up.
+--- Whether the bot is in combat right now (a grouped bot is visible as a unit; nil = unknown).
+NS.BotInCombat = function(botName)
+    local key = strlower(botName)
+    local found
+    ForEachGroupMember(function(unit, name)
+        if name and strlower(name) == key then found = UnitAffectingCombat(unit) and true or false end
+    end)
+    return found
+end
+
 NS.PollBotItems = function(botName)
     local key = strlower(botName)
+    -- A bot in combat answers "items" with "I am in combat": the background poll leaves it alone until the fight is over.
+    if NS.BotInCombat(botName) then return end
     local openWindow = NS.botBagsFrames[key]
     if openWindow and openWindow:IsShown() then return end   -- the poll stays away from an open bags window
     if bagsItemsAwaiting[key] then return end
@@ -6432,10 +6498,86 @@ end
 --- would shift everything after it. Matched by cell.itemLink (the exact
 --- link this specific cell is showing), not just item id, since two cells
 --- for the same item can coexist.
-local function RemoveBagsItemOptimistically(botName, itemLink)
+--- What was taken out of a bot's bags window for a trade and is not confirmed yet: lower(bot) -> list of
+--- { link, count, index }. A cancelled trade ("Сделка отменена.") puts it back, a completed one forgets it.
+NS.tradeOffers = {}
+NS.NoteTradeOffer = function(key, link, count, index)
+    local list = NS.tradeOffers[key] or {}
+    NS.tradeOffers[key] = list
+    list[#list + 1] = { link = link, count = count, index = index }
+    NS.Trace("bags", string.format("trade offer %s: %s x%d taken out of the window (cell %s)", key, link, count, tostring(index)))
+end
+
+--- Returns one offered stack to the cache (the same entry when it is still there, else its old cell or the first hole).
+NS.RestoreTradeOffer = function(key, offer)
+    NS.Trace("bags", string.format("trade cancelled: %s x%d goes back", offer.link, offer.count))
+    local f = NS.botBagsFrames[key]
+    if not f or not f.items then return end
+    local maxIndex = f.itemsMaxIndex or #f.items
+    for i = 1, maxIndex do
+        local item = f.items[i]
+        if item and item.link == offer.link then
+            item.count = (item.count or 1) + offer.count
+            return
+        end
+    end
+    local at = offer.index
+    if not at or f.items[at] then
+        at = nil
+        for i = 1, maxIndex do
+            if not f.items[i] then at = i break end
+        end
+        at = at or (maxIndex + 1)
+    end
+    f.items[at] = { link = offer.link, count = offer.count }
+    if at > maxIndex then f.itemsMaxIndex = at end
+    if NS.bagsSessionSoldLinks[key] then NS.bagsSessionSoldLinks[key][offer.link] = nil end
+end
+
+NS.tradeResultFrame = CreateFrame("Frame")
+NS.tradeResultFrame:RegisterEvent("UI_INFO_MESSAGE")
+NS.tradeResultFrame:SetScript("OnEvent", function(_, _, msg)
+    local cancelled = msg == ERR_TRADE_CANCELLED
+    if not cancelled and msg ~= ERR_TRADE_COMPLETE then return end
+    local offers = NS.tradeOffers
+    local pending = 0
+    for _, list in pairs(offers) do pending = pending + #list end
+    NS.Trace("bags", string.format("trade %s, %d offered stack(s) pending", cancelled and "cancelled" or "completed", pending))
+    NS.tradeOffers = {}
+    if not cancelled then return end
+    for key, list in pairs(offers) do
+        for _, offer in ipairs(list) do NS.RestoreTradeOffer(key, offer) end
+        local f = NS.botBagsFrames[key]
+        if f and f.items and f:IsShown() then
+            local entry = NS.bots[key]
+            PaintBagsFrame(f.botName, f.items, entry and entry.bagTotal, entry and entry.bagFree, entry and entry.money)
+        end
+    end
+end)
+
+local function RemoveBagsItemOptimistically(botName, itemLink, stackCount)
     local key = strlower(botName)
     local f = NS.botBagsFrames[key]
     if not f or not f.items then return end
+    -- Trade takes ONE stack (user-checked: of 3000 arrows one slot of 1000 goes into the trade window), so when the
+    -- item is shown as several stacks only what the clicked cell really holds (999 as well as 1000) leaves the cache
+    -- (`stackCount`) and the other stacks stay in place.
+    if stackCount then
+        for i = 1, (f.itemsMaxIndex or #f.items) do
+            local item = f.items[i]
+            if item and item.link == itemLink then
+                NS.NoteTradeOffer(key, itemLink, stackCount, i)
+                if (item.count or 1) > stackCount then
+                    item.count = item.count - stackCount
+                    local rosterEntry = NS.bots[key]
+                    PaintBagsFrame(botName, f.items, rosterEntry and rosterEntry.bagTotal,
+                        rosterEntry and rosterEntry.bagFree, rosterEntry and rosterEntry.money)
+                    return
+                end
+                break
+            end
+        end
+    end
     -- Remembers this link as sold/traded away THIS session — see
     -- MergeBagsUpdate's own doc comment for why: a background "items" reply
     -- that still lists this item (the server just hasn't caught up to this
@@ -6457,6 +6599,60 @@ local function RemoveBagsItemOptimistically(botName, itemLink)
         rosterEntry and rosterEntry.bagTotal,
         rosterEntry and rosterEntry.bagFree,
         rosterEntry and rosterEntry.money)
+end
+
+-- Stack sizes (per explicit user direction): the base is what the client itself says (GetItemInfo's 8th value) and OUR
+-- OWN list of corrections is laid over it where this server is known to differ ("stats" counts the real slots): the
+-- corrections are DELTAS added to the client's number (trade goods: the client says 60, the server 90 -> +30). The list
+-- grows by hand with what is known for sure. Delta lookup: "type/subtype" first, else type (English and Russian
+-- spellings, lower case). Exact item ids are absolute limits and win over everything. Ammo needs no correction (the
+-- client already says 1000).
+-- Nothing known yet (item not in the client's cache) -> nil, one slot is assumed.
+NS.STACK_LIMIT_BY_ID = {}      -- [itemId] = absolute limit for a single item
+NS.STACK_DELTA_BY_SUBTYPE = {} -- e.g. ["trade goods/cloth"] = 30 for a single subtype
+NS.STACK_DELTA_BY_TYPE = {
+    ["trade goods"] = 30, ["хозяйственные товары"] = 30,
+}
+
+--- The stack limit this server really has for an item (by link), or nil when we do not know it yet.
+NS.StackLimit = function(link)
+    if not link then return nil end
+    local id = tonumber(link:match("item:(%d+)"))
+    if id and NS.STACK_LIMIT_BY_ID[id] then return NS.STACK_LIMIT_BY_ID[id] end
+    local _, _, _, _, _, itemType, subType, clientStack = GetItemInfo(link)
+    if not itemType then
+        -- not in the client's cache yet: a tooltip on the link makes the client ask the server, and
+        -- GET_ITEM_INFO_RECEIVED (below) repaints the open bags windows once the answer is in
+        NS.stackInfoWanted = true
+        itemScanTooltip:SetHyperlink(link)
+        return nil
+    end
+    local t = strlower(itemType)
+    local delta = (subType and NS.STACK_DELTA_BY_SUBTYPE[t .. "/" .. strlower(subType)]) or NS.STACK_DELTA_BY_TYPE[t] or 0
+    return clientStack and (clientStack + delta) or nil
+end
+
+NS.stackInfoFrame = CreateFrame("Frame")
+NS.stackInfoFrame:RegisterEvent("GET_ITEM_INFO_RECEIVED")
+NS.stackInfoFrame:SetScript("OnEvent", function()
+    if not NS.stackInfoWanted or NS.stackInfoRepaintQueued then return end
+    NS.stackInfoRepaintQueued = true
+    NS.After(0.5, function()   -- one repaint for a burst of answers
+        NS.stackInfoRepaintQueued = false
+        NS.stackInfoWanted = false
+        for key, f in pairs(NS.botBagsFrames) do
+            if f:IsShown() and f.items then
+                local entry = NS.bots[key]
+                PaintBagsFrame(f.botName, f.items, entry and entry.bagTotal, entry and entry.bagFree, entry and entry.money)
+            end
+        end
+    end)
+end)
+
+--- How many bag slots `count` items of limit `limit` occupy (one when the limit is unknown).
+NS.SlotsFor = function(count, limit)
+    if not limit or limit < 1 then return 1 end
+    return math.max(1, math.ceil(count / limit))
 end
 
 --- A purchase made FOR a bot at the vendor (see the wrapped BuyMerchantItem): the bot's gold goes down
@@ -6495,10 +6691,20 @@ NS.AddBagsItemOptimistically = function(botName, itemLink, count, copperSpent)
             break
         end
     end
+    -- Free slots: only when the stack limit of this item is KNOWN (NS.StackLimit) - the slots it newly takes are
+    -- counted off at once; otherwise the number is left to the "stats" asked for after the purchase.
+    local limit = NS.StackLimit(itemLink)
+    local slotsBefore, slotsAfter
     if existing then
+        slotsBefore = NS.SlotsFor(existing.count or 1, limit)
         existing.count = (existing.count or 1) + count
+        slotsAfter = NS.SlotsFor(existing.count, limit)
     else
         cache[hole or (maxIndex + 1)] = { link = itemLink, count = count }
+        slotsBefore, slotsAfter = 0, NS.SlotsFor(count, limit)
+    end
+    if limit and entry and entry.bagFree then
+        entry.bagFree = math.max(0, entry.bagFree - (slotsAfter - slotsBefore))
     end
     local f = NS.botBagsFrames[key]
     if f then
@@ -6580,7 +6786,7 @@ NS.TradeCellItem = function(cell)
     -- окна сумки"). If the action never actually goes through server-side,
     -- the cell stays wrong until the window is closed and reopened — an
     -- accepted tradeoff for not hammering the bot with a fetch per click.
-    RemoveBagsItemOptimistically(botName, cell.itemLink)
+    RemoveBagsItemOptimistically(botName, cell.itemLink, not sellMode and cell.stackCount or nil)
 end
 
 --- Opens the right-click context menu for an item cell. A complete no-op in
@@ -6625,7 +6831,7 @@ NS.ShowItemCellMenu = function(cell)
                 -- comment for why "t" can't just be whispered on its own.
                 pendingTradeOffer = { key = strlower(botName), link = link }
                 InitiateTrade(botName)
-                RemoveBagsItemOptimistically(botName, cell.itemLink)
+                RemoveBagsItemOptimistically(botName, cell.itemLink, cell.stackCount)
             end
             UIDropDownMenu_AddButton(info)
 
@@ -13100,6 +13306,68 @@ NS.fluffFrame:SetScript("OnUpdate", function(self, dt)
 end)
 
 NS.After(5, NS.MemSampleLoop)   -- the first measurement a few seconds after the start, then every NS.MEM_SAMPLE_SECONDS
+
+-- ------------------------------------------------------------------
+-- Diagnostic slash commands (kept small):
+--   /abfocus            then point the mouse at some UI within 4 seconds: describes the frame under the cursor
+--   /abglobals Prefix   lists the global tables whose names start with Prefix
+--   /abevent            for 2 minutes describes every chat line containing "in combat" with the event it came by
+-- ------------------------------------------------------------------
+SLASH_ALTBOTFOCUS1 = "/abfocus"
+SlashCmdList["ALTBOTFOCUS"] = function()
+    Print("abfocus: point the mouse at the thing within 4 seconds...", "always")
+    NS.After(4, function()
+        local f = GetMouseFocus()
+        if not f then Print("abfocus: nothing under the mouse", "always") return end
+        local chain, cur = {}, f
+        while cur and cur ~= UIParent and #chain < 8 do
+            chain[#chain + 1] = (cur:GetName() or "?") .. ":" .. cur:GetObjectType()
+            cur = cur:GetParent()
+        end
+        Print("abfocus: " .. table.concat(chain, " < "), "always")
+        if f.GetText then Print("abfocus text: " .. tostring(f:GetText()), "always") end
+        if f.GetRegions then
+            for _, r in ipairs({ f:GetRegions() }) do
+                Print("abfocus region: " .. r:GetObjectType() .. " " .. tostring(r:GetName()) .. " " ..
+                    tostring(r.GetText and r:GetText()), "always")
+            end
+        end
+    end)
+end
+
+SLASH_ALTBOTGLOBALS1 = "/abglobals"
+SlashCmdList["ALTBOTGLOBALS"] = function(prefix)
+    prefix = prefix or ""
+    local names = {}
+    for name, value in pairs(_G) do
+        if type(name) == "string" and strsub(name, 1, #prefix) == prefix and type(value) == "table" then
+            names[#names + 1] = name
+        end
+    end
+    table.sort(names)
+    Print("abglobals " .. prefix .. ": " .. #names .. " found", "always")
+    for i = 1, math.min(#names, 40) do Print("  " .. names[i], "always") end
+end
+
+SLASH_ALTBOTEVENT1 = "/abevent"
+SlashCmdList["ALTBOTEVENT"] = function()
+    NS.abeventUntil = GetTime() + 120
+    if not NS.abeventFrame then
+        NS.abeventFrame = CreateFrame("Frame")
+        for _, ev in ipairs({ "CHAT_MSG_SYSTEM", "CHAT_MSG_SAY", "CHAT_MSG_YELL", "CHAT_MSG_EMOTE", "CHAT_MSG_TEXT_EMOTE",
+            "CHAT_MSG_PARTY", "CHAT_MSG_PARTY_LEADER", "CHAT_MSG_RAID", "CHAT_MSG_RAID_LEADER", "CHAT_MSG_RAID_WARNING",
+            "CHAT_MSG_WHISPER", "CHAT_MSG_MONSTER_SAY", "CHAT_MSG_MONSTER_WHISPER", "CHAT_MSG_MONSTER_EMOTE",
+            "CHAT_MSG_RAID_BOSS_EMOTE", "CHAT_MSG_RAID_BOSS_WHISPER", "CHAT_MSG_CHANNEL" }) do
+            NS.abeventFrame:RegisterEvent(ev)
+        end
+        NS.abeventFrame:SetScript("OnEvent", function(self, event, msg, sender)
+            if GetTime() < (NS.abeventUntil or 0) and msg and strfind(msg, "in combat", 1, true) then
+                Print("abevent: " .. event .. " sender=" .. tostring(sender) .. " msg=" .. tostring(msg):gsub("|", "||"), "always")
+            end
+        end)
+    end
+    Print("abevent: watching chat lines with 'in combat' for 2 minutes", "always")
+end
 
 -- Minimap icon — a small draggable button orbiting the minimap, standard
 -- pattern for addon minimap buttons in 3.3.5 (no LibDBIcon dependency, kept

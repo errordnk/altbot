@@ -117,7 +117,7 @@ saved and show `?` until their first reply.
 | level | spellbook window | the native spellbook |
 | top row, the hourly XP gain `+N%` (Farm) | park / release the bot | - |
 
-**Right click** anywhere on a column opens a menu under the cursor - *Summon* (park / release, Farm mode), *Armory*,
+**Right click** anywhere on a column opens a menu under the cursor - *Summon* (park the bot next to you; shown in Farm mode only, and *Free* for a parked bot), *Armory*,
 *Strategies*, *Inventory*, *Questlog*, *Spellbook*, *Cancel* - with the same actions as the clicks above (for the master:
 the standard game windows). Dragging a column's body with the left button moves the whole frame.
 

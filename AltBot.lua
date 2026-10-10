@@ -4003,7 +4003,6 @@ NS.ShowBoardMenu = function(col)
     local items
     if master then
         items = {
-            { text = "Summon", disabled = true },
             { text = "Armory", func = function() ToggleCharacter("PaperDollFrame") end },
             { text = "Strategies", func = function() NS.ToggleGroupStrategy() end },
             { text = "Inventory", func = function() OpenAllBags() end },
@@ -4012,14 +4011,21 @@ NS.ShowBoardMenu = function(col)
         }
     else
         local key = col.botKey
-        items = {
-            { text = "Summon", disabled = not inFarm, func = function() NS.ToggleFarmHold(key) end },
+        items = {}
+        -- The first item exists only in Farm mode (per explicit user direction): "Summon" parks the bot next to
+        -- the master, and for a bot that is already parked it reads "Free" (puts it back to work).
+        if inFarm then
+            local entry = NS.bots[key]
+            items[#items + 1] = { text = (entry and entry.farmHeld) and "Free" or "Summon",
+                func = function() NS.ToggleFarmHold(key) end }
+        end
+        for _, it in ipairs({
             { text = "Armory", func = function() NS.ToggleBotArmory(name) end },
             { text = "Strategies", func = function() NS.ToggleBotStrategy(name) end },
             { text = "Inventory", func = function() NS.ToggleBotBags(name) end },
             { text = "Questlog", func = function() NS.ToggleBotQuestLog(name) end },
             { text = "Spellbook", func = function() NS.ToggleBotSpellbook(name) end },
-        }
+        }) do items[#items + 1] = it end
     end
     UIDropDownMenu_Initialize(NS.boardMenu, function()
         for _, item in ipairs(items) do

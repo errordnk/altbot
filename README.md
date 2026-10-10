@@ -20,15 +20,14 @@ Everything goes through ordinary **whispers and group chat** - no server changes
 command works when you type it to a bot by hand, the addon can send it.
 
 - [Requirements](#requirements) · [Installation](#installation) · [Quick start](#quick-start)
-- [The action bar](#the-action-bar) · [Keyboard shortcuts](#keyboard-shortcuts) · [Modes](#modes) · [The stats board](#the-stats-board)
+- [The action bar](#the-action-bar) · [Screen space](#screen-space) · [Keyboard shortcuts](#keyboard-shortcuts) · [Modes](#modes) · [The stats board](#the-stats-board)
 - [Per-bot windows](#per-bot-windows) · [Settings and chat control](#settings-and-chat-control)
 - [Vendors](#vendors) · [Trainers](#trainers) · [Slash commands](#slash-commands) · [Saved data](#saved-data) · [Limitations](#limitations)
 - [Development](#development) · [Credits](#credits) · [License](#license)
 
 ## Requirements
 
-- A WotLK 3.3.5a client and an AzerothCore server with **mod-playerbots**. The master must be allowed to use
-  `.playerbots bot add / remove / addclass` (the addon sends them in `/s`).
+- A WotLK 3.3.5a client and an AzerothCore server with **mod-playerbots**.
 - The bots must be able to answer plain whispers (`stats`, `items`, `who`, `spells`, `quests all`, `co ?`, `nc ?` ...); this is
   the default behaviour of mod-playerbots.
 - Optional: **GearScoreLite** (the armory window then shows the same GearScore as the native frame).
@@ -75,6 +74,13 @@ Left to right (the first six only exist in Quest mode):
 Follow/Stay, the reaction and the mode are **account-wide**: whatever one master sets is what the next master logs in with,
 and the raid is put into that state once it has been formed.
 
+## Screen space
+
+The board is meant to be easy to get out of the way (not everyone plays on a 4K monitor): **right click the minimap icon**
+to hide or show the board alone, **left click** it to hide or show the board with the action bar; both can also be bound to
+keys (see below). The **Board scale** slider in the settings shrinks the board down to 50 %, the *hide ...* checkboxes remove
+rows you do not need, and every frame can be dragged anywhere.
+
 ## Keyboard shortcuts
 
 Every action-bar button can be bound to a key: open the game's **Key Bindings** window (Esc → Key Bindings), find the
@@ -110,6 +116,10 @@ saved and show `?` until their first reply.
 | XP % | quest log window | the native quest log |
 | level | spellbook window | the native spellbook |
 | top row, the hourly XP gain `+N%` (Farm) | park / release the bot | - |
+
+**Right click** anywhere on a column opens a menu under the cursor - *Summon* (park / release, Farm mode), *Armory*,
+*Strategies*, *Inventory*, *Questlog*, *Spellbook*, *Cancel* - with the same actions as the clicks above (for the master:
+the standard game windows). Dragging a column's body with the left button moves the whole frame.
 
 **Moving members between groups:** drag a column by its **class icon** onto another group's frame. If that group has a free
 place the member moves there; if it is full, drop onto a member to swap places. (Needs raid leader or assistant.) While
@@ -150,6 +160,8 @@ default 30; how often every bot is asked for `stats`, `rpg status` and `items`) 
 100). Below are the checkboxes:
 
 - **sell vendor** - sell with `s vendor` instead of `s *`.
+- **hide gains / icons / names / bags / gold / xp / levels** - hide that row of every board column; the visible rows close
+  up, and even with all rows hidden the column stays as a small block you can right-click.
 - **chat init / stats / farm / inventory / armory / strategies / questlog / spellbook** - by default **nothing** the addon
   does reaches your chat. Tick an area to watch only that: its commands, the bots' replies and the addon's own messages.
   `init` also takes everything that fits no other area (loading, group forming, mode switches, failures). Only the

@@ -3273,10 +3273,57 @@ NS.ToggleFarmHold = function(key)
     if NS.RefreshPanel then NS.RefreshPanel() end
 end
 
+-- Which rows of a board column are shown, per explicit user direction: the settings window has a "hide ..." checkbox
+-- per row (account-wide AltBot_SavedVars.hide[key]); the visible rows are stacked without gaps, and even with every
+-- row hidden the column stays as a small block that can still be right-clicked (the menu, see NS.ShowBoardMenu).
+NS.HIDE_ROWS = { { key = "gain", label = "hide gains" }, { key = "icon", label = "hide icons" },
+    { key = "name", label = "hide names" }, { key = "bags", label = "hide bags" },
+    { key = "gold", label = "hide gold" }, { key = "xp", label = "hide xp" }, { key = "level", label = "hide levels" } }
+NS.ROW_HEIGHTS = { gain = 12, icon = 20, name = 14, bags = 12, gold = 12, xp = 12, level = 12 }   -- tight rows, per explicit user direction
+NS.RowHidden = function(key)
+    local hide = AltBot_SavedVars and AltBot_SavedVars.hide
+    return (hide and hide[key]) and true or false
+end
+--- The height of a column with the currently visible rows (never less than a clickable block).
+NS.ColumnHeight = function()
+    local h = TOP_PAD
+    for _, row in ipairs(NS.HIDE_ROWS) do
+        if not NS.RowHidden(row.key) then h = h + NS.ROW_HEIGHTS[row.key] end
+    end
+    return math.max(h, 24)
+end
+--- Stacks the visible rows of column `f` from the top and hides the others.
+NS.ApplyColumnLayout = function(f)
+    local elements = { gain = f.xpGain, icon = f.classIconBtn, name = f.name, bags = f.bags, gold = f.money,
+        xp = f.xp, level = f.lvl }
+    local buttons = { gain = f.xpGainBtn, name = f.nameBtn, bags = f.bagsBtn, xp = f.xpBtn, level = f.lvlBtn }
+    local y = TOP_PAD
+    for _, row in ipairs(NS.HIDE_ROWS) do
+        local key = row.key
+        local element, button = elements[key], buttons[key]
+        if NS.RowHidden(key) then
+            element:Hide()
+            if button then button:Hide() end
+        else
+            element:ClearAllPoints()
+            element:SetPoint("TOP", f, "TOP", 0, -y)
+            if key ~= "icon" then element:Show() end   -- the icon button is shown/hidden by the class being known
+            if button then button:Show() end
+            y = y + NS.ROW_HEIGHTS[key]
+        end
+    end
+    f:SetHeight(NS.ColumnHeight())
+end
+
 local function CreateColumn(parent)
     NS.boardColumnSerial = (NS.boardColumnSerial or 0) + 1
     local f = CreateFrame("Frame", "AltBotCol" .. NS.boardColumnSerial, parent)
-    f:SetSize(COL_WIDTH, ROW_HEIGHT * 6 + ICON_SIZE + TOP_PAD)
+    f:SetSize(COL_WIDTH, NS.ColumnHeight())
+
+    -- A faint block behind the column: with every row hidden this is what is left to click on.
+    f.bg = f:CreateTexture(nil, "BACKGROUND")
+    f.bg:SetAllPoints(f)
+    f.bg:SetTexture(1, 1, 1, 0.06)
 
     -- Row 0 (top): hourly XP% gain.
     f.xpGain = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -3333,24 +3380,24 @@ local function CreateColumn(parent)
     -- size, confirmed in-game): the top row (park/release in Farm), the bags row,
     -- the name row and the xp row.
     f.xpGainBtn = CreateFrame("Button", nil, f)
-    f.xpGainBtn:SetSize(COL_WIDTH, 14)
+    f.xpGainBtn:SetSize(COL_WIDTH, 12)
     f.xpGainBtn:SetPoint("CENTER", f.xpGain, "CENTER", 0, 0)
 
     f.bagsBtn = CreateFrame("Button", nil, f)
-    f.bagsBtn:SetSize(COL_WIDTH, 14)
+    f.bagsBtn:SetSize(COL_WIDTH, 12)
     f.bagsBtn:SetPoint("CENTER", f.bags, "CENTER", 0, 0)
 
     f.nameBtn = CreateFrame("Button", nil, f)
-    f.nameBtn:SetSize(COL_WIDTH, 14)
+    f.nameBtn:SetSize(COL_WIDTH, 12)
     f.nameBtn:SetPoint("CENTER", f.name, "CENTER", 0, 0)
 
     f.xpBtn = CreateFrame("Button", nil, f)
-    f.xpBtn:SetSize(COL_WIDTH, 14)
+    f.xpBtn:SetSize(COL_WIDTH, 12)
     f.xpBtn:SetPoint("CENTER", f.xp, "CENTER", 0, 0)
 
     -- Level row: the bot's spellbook window (until talents get this row).
     f.lvlBtn = CreateFrame("Button", nil, f)
-    f.lvlBtn:SetSize(COL_WIDTH, 14)
+    f.lvlBtn:SetSize(COL_WIDTH, 12)
     f.lvlBtn:SetPoint("CENTER", f.lvl, "CENTER", 0, 0)
 
     -- Status highlight strip behind the whole column, shown while the chain
@@ -3369,6 +3416,27 @@ local function CreateColumn(parent)
     f.classIconBtn:SetScript("OnDragStart", function() NS.BoardDragStart(f) end)
     f.classIconBtn:SetScript("OnDragStop", function() NS.BoardDragStop() end)
 
+    -- The column itself takes the mouse (so even an empty column can be right-clicked); dragging it with
+    -- the left button moves the whole board frame it sits in.
+    f:EnableMouse(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", function()
+        local board = f:GetParent()
+        if board and board.StartMoving then board:StartMoving() end
+    end)
+    f:SetScript("OnDragStop", function()
+        local board = f:GetParent()
+        local stop = board and board:GetScript("OnDragStop")
+        if stop then stop(board) end
+    end)
+    -- Right click anywhere on the column (its rows included): the menu.
+    for _, part in ipairs({ f, f.classIconBtn, f.xpGainBtn, f.bagsBtn, f.nameBtn, f.xpBtn, f.lvlBtn }) do
+        part:SetScript("OnMouseUp", function(_, button)
+            if button == "RightButton" then NS.ShowBoardMenu(f) end
+        end)
+    end
+
+    NS.ApplyColumnLayout(f)
     f:Hide()
     NS.boardColumns[#NS.boardColumns + 1] = f
     return f
@@ -3421,9 +3489,10 @@ NS.LayoutBoardFrame = function(f, count)
     -- A frame always has room for 5 members (a raid group); free places stay empty, per
     -- explicit user direction ("если фрейм табло не полный, то показывать пустое место").
     local places = math.max(count, 5)
-    local width = places * COL_WIDTH + (places - 1) * COL_MARGIN + COL_MARGIN * 2
+    -- no gap between the columns (per explicit user direction): they touch, the frame keeps a margin around them
+    local width = places * COL_WIDTH + COL_MARGIN * 2
     f:SetWidth(width)
-    f:SetHeight(ROW_HEIGHT * 6 + ICON_SIZE + TOP_PAD + COL_MARGIN * 2)
+    f:SetHeight(NS.ColumnHeight() + COL_MARGIN * 2)
     for i = 1, count do
         local col = f.columns[i]
         if not col then
@@ -3432,7 +3501,7 @@ NS.LayoutBoardFrame = function(f, count)
         end
         col:ClearAllPoints()
         col:SetPoint("CENTER", f, "CENTER",
-            -width / 2 + COL_MARGIN + COL_WIDTH / 2 + (i - 1) * (COL_WIDTH + COL_MARGIN), 0)
+            -width / 2 + COL_MARGIN + COL_WIDTH / 2 + (i - 1) * COL_WIDTH, 0)
         col:Show()
     end
     for i = count + 1, #f.columns do
@@ -3730,6 +3799,7 @@ local function FillBotColumn(f, key, entry)
     else
         f.activeGlow:Hide()
     end
+    NS.ApplyColumnLayout(f)
 end
 
 --- Draws the master into board column `f`: the same rows as a bot, but every click
@@ -3810,6 +3880,7 @@ local function FillMasterColumn(f)
     f.xp:SetTextColor(0.8, 0.8, 1.0)
     f.lvl:SetText(tostring(entry.level or "?"))
     f.lvl:SetTextColor(0.9, 0.9, 0.9)
+    NS.ApplyColumnLayout(f)
 end
 
 -- ------------------------------------------------------------------
@@ -3849,6 +3920,7 @@ NS.BoardDragStart = function(col)
     if GetNumRaidMembers() == 0 or not col.dragName then return end
     NS.boardDrag = { name = col.dragName, source = col }
     local g = NS.GetBoardGhost()
+    NS.ApplyColumnLayout(g)
     for _, field in ipairs({ "xpGain", "name", "bags", "money", "xp", "lvl" }) do
         g[field]:SetText(col[field]:GetText())
         g[field]:SetTextColor(col[field]:GetTextColor())
@@ -3914,6 +3986,57 @@ NS.BoardDragStop = function()
     NS.boardDragExtra = nil
     NS.RefreshPanel()
     NS.After(0.6, function() NS.boardDirty = true end)   -- the roster update lands a moment later
+end
+
+-- Right click on a column: a menu with the same actions as the clicks on its rows (per explicit user direction),
+-- opened under the cursor. A bot's column: its own windows; the master's: the standard game windows.
+NS.boardMenu = CreateFrame("Frame", "AltBotBoardMenu", UIParent, "UIDropDownMenuTemplate")
+
+NS.ShowBoardMenu = function(col)
+    local master = col.botKey == "__master"
+    local name = col.dragName
+    if not name then return end
+    local inFarm = NS.EffectiveMode() == NS.MODE_FARM
+    local function native(frame)
+        return function() if frame:IsShown() then HideUIPanel(frame) else ShowUIPanel(frame) end end
+    end
+    local items
+    if master then
+        items = {
+            { text = "Summon", disabled = true },
+            { text = "Armory", func = function() ToggleCharacter("PaperDollFrame") end },
+            { text = "Strategies", func = function() NS.ToggleGroupStrategy() end },
+            { text = "Inventory", func = function() OpenAllBags() end },
+            { text = "Questlog", func = function() native(QuestLogFrame)() end },
+            { text = "Spellbook", func = function() native(SpellBookFrame)() end },
+        }
+    else
+        local key = col.botKey
+        items = {
+            { text = "Summon", disabled = not inFarm, func = function() NS.ToggleFarmHold(key) end },
+            { text = "Armory", func = function() NS.ToggleBotArmory(name) end },
+            { text = "Strategies", func = function() NS.ToggleBotStrategy(name) end },
+            { text = "Inventory", func = function() NS.ToggleBotBags(name) end },
+            { text = "Questlog", func = function() NS.ToggleBotQuestLog(name) end },
+            { text = "Spellbook", func = function() NS.ToggleBotSpellbook(name) end },
+        }
+    end
+    UIDropDownMenu_Initialize(NS.boardMenu, function()
+        for _, item in ipairs(items) do
+            local info = UIDropDownMenu_CreateInfo()
+            info.notCheckable = true
+            info.text = item.text
+            info.disabled = item.disabled
+            info.func = item.func
+            UIDropDownMenu_AddButton(info)
+        end
+        local cancel = UIDropDownMenu_CreateInfo()
+        cancel.notCheckable = true
+        cancel.text = "Cancel"
+        cancel.func = function() CloseDropDownMenus() end
+        UIDropDownMenu_AddButton(cancel)
+    end, "MENU")
+    ToggleDropDownMenu(1, nil, NS.boardMenu, "cursor", 0, 0)
 end
 
 --- Redraws the whole board: which frames exist and what's in each column. Cheap
@@ -12822,55 +12945,80 @@ local function GetOrCreateSettingsFrame()
             NS.ApplyBoardScale()
         end)
 
-    -- The checkboxes: "sell vendor", one per chat category, "del cache" LAST.
-    local items = {}
-    items[#items + 1] = { label = "sell vendor",
-        get = function() return AltBot_SavedVars and AltBot_SavedVars.sellVendorOnly or false end,
-        set = function(v) AltBot_SavedVars.sellVendorOnly = v end }
-    for _, cat in ipairs(NS.CHAT_CATEGORIES) do
-        items[#items + 1] = { label = cat.label,
-            get = function() return NS.ChatShown(cat.key) end,
-            set = function(v)
-                AltBot_SavedVars.chatShow = AltBot_SavedVars.chatShow or {}
-                AltBot_SavedVars.chatShow[cat.key] = v
-            end }
-    end
-    -- "dance": every bot of the party dances; "emotes": every 5 minutes one random bot makes a random
-    -- emote (see NS.fluffFrame); both work in Quest mode only. Off by default.
-    items[#items + 1] = { label = "dance",
-        get = function() return AltBot_SavedVars and AltBot_SavedVars.dance or false end,
-        set = function(v)
+    -- The checkboxes, in blocks under the sliders (per explicit user direction): "sell vendor" + "delete cache"
+    -- (with the two "fun" ones, "dance" and "emotes", beside them on the same row), the "hide" block, the "chat" block.
+    local function item(label, get, set) return { label = label, get = get, set = set } end
+    local sellItem = item("sell vendor",
+        function() return AltBot_SavedVars and AltBot_SavedVars.sellVendorOnly or false end,
+        function(v) AltBot_SavedVars.sellVendorOnly = v end)
+    -- "delete cache": while ticked, the addon starts every time as if it were the very first run (see the
+    -- ADDON_LOADED handler); the tick itself is a plain setting and is always remembered.
+    local delItem = item("delete cache",
+        function() return AltBot_SavedVars and AltBot_SavedVars.delCache or false end,
+        function(v) AltBot_SavedVars.delCache = v end)
+    -- "dance": every bot of the party dances; "emotes": every 5 minutes one random bot makes a random emote
+    -- (see NS.fluffFrame); both work in Quest mode only. Off by default.
+    local danceItem = item("dance",
+        function() return AltBot_SavedVars and AltBot_SavedVars.dance or false end,
+        function(v)
             AltBot_SavedVars.dance = v
             -- the master announces it in the chat (per explicit user direction)
             SendChatMessage(v and "Танцуют все!" or "Не до танцев сегодня, зима близко!", "SAY")
-        end }
-    items[#items + 1] = { label = "emotes",
-        get = function() return AltBot_SavedVars and AltBot_SavedVars.emotes or false end,
-        set = function(v) AltBot_SavedVars.emotes = v end }
-    -- "del cache": while ticked, the addon starts every time as if it were the very first run (see
-    -- the ADDON_LOADED handler); the tick itself is a plain setting and is always remembered.
-    items[#items + 1] = { label = "delete cache",
-        get = function() return AltBot_SavedVars and AltBot_SavedVars.delCache or false end,
-        set = function(v) AltBot_SavedVars.delCache = v end }
+        end)
+    local emotesItem = item("emotes",
+        function() return AltBot_SavedVars and AltBot_SavedVars.emotes or false end,
+        function(v) AltBot_SavedVars.emotes = v end)
+    -- "hide gains / icons / names / bags / gold / xp / levels": which rows of the board columns are shown.
+    local hideItems = {}
+    for _, row in ipairs(NS.HIDE_ROWS) do
+        hideItems[#hideItems + 1] = item(row.label,
+            function() return NS.RowHidden(row.key) end,
+            function(v)
+                AltBot_SavedVars.hide = AltBot_SavedVars.hide or {}
+                AltBot_SavedVars.hide[row.key] = v or nil
+                NS.RefreshPanel()
+            end)
+    end
+    -- "chat ...": one checkbox per chat area.
+    local chatItems = {}
+    for _, cat in ipairs(NS.CHAT_CATEGORIES) do
+        chatItems[#chatItems + 1] = item(cat.label,
+            function() return NS.ChatShown(cat.key) end,
+            function(v)
+                AltBot_SavedVars.chatShow = AltBot_SavedVars.chatShow or {}
+                AltBot_SavedVars.chatShow[cat.key] = v
+            end)
+    end
 
-    local gridTop = 40 + CHART_H + 8 + 48   -- (the sliders sit between the chart and the checkboxes)
-    for i, item in ipairs(items) do
-        local col, row = (i - 1) % COLS, math.floor((i - 1) / COLS)
+    local BLOCK_GAP = 10
+    local y = 40 + CHART_H + 8 + 48   -- (the sliders sit between the chart and the checkboxes)
+    local function place(it, col, row)
         local cb = CreateFrame("CheckButton", nil, f, "UICheckButtonTemplate")
         cb:SetSize(24, 24)
-        cb:SetPoint("TOPLEFT", f, "TOPLEFT", 16 + col * COL_W, -(gridTop + row * ROW_H))
-        cb:SetChecked(item.get())
+        cb:SetPoint("TOPLEFT", f, "TOPLEFT", 16 + col * COL_W, -(y + row * ROW_H))
+        cb:SetChecked(it.get())
         cb:SetScript("OnClick", function(self)
             AltBot_SavedVars = AltBot_SavedVars or {}
-            item.set(self:GetChecked() and true or false)
+            it.set(self:GetChecked() and true or false)
         end)
         local label = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         label:SetPoint("LEFT", cb, "RIGHT", 2, 0)
-        label:SetText(item.label)
+        label:SetText(it.label)
         label:SetTextColor(1, 1, 1)
     end
-    local rows = math.ceil(#items / COLS)
-    f:SetHeight(gridTop + rows * ROW_H + 18)
+    -- block 1: sell vendor, dance, emotes and, last, delete cache - one row
+    place(sellItem, 0, 0)
+    place(danceItem, 1, 0)
+    place(emotesItem, 2, 0)
+    place(delItem, 3, 0)   -- "delete cache" is always the last of the row
+    y = y + ROW_H + BLOCK_GAP
+    -- block 2: hide
+    for n, it in ipairs(hideItems) do place(it, (n - 1) % COLS, math.floor((n - 1) / COLS)) end
+    y = y + math.ceil(#hideItems / COLS) * ROW_H + BLOCK_GAP
+    -- block 3: chat
+    for n, it in ipairs(chatItems) do place(it, (n - 1) % COLS, math.floor((n - 1) / COLS)) end
+    y = y + math.ceil(#chatItems / COLS) * ROW_H
+    f:SetHeight(y + 18)
 
     f:Hide()
     settingsFrame = f

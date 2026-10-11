@@ -2124,6 +2124,167 @@ NS.FinalizeTrainerResult = function(key, entry)
 end
 
 -- ============================================================
+-- Making space in a full bag (per explicit user direction). The bot arrives with ZERO free slots and gets "s */vendor".
+-- No fresh "stats" is awaited for the verdict: the sale lines in the chat ("Selling [item]") say at once whether a slot
+-- came free. When nothing was sold the bag is full of things the vendor command leaves alone, so, one step after the
+-- other and each judged by the bot's own replies:
+--   1. every green/blue piece of gear is disenchanted ("cast 13262 <link>"; "Casting ..." = it works);
+--   2. the pieces that could NOT be disenchanted (no Enchanting / not enough skill: "Cannot cast ...") are sold one by one;
+--   3. if still nothing came free (nothing disenchanted, nothing sold), all food and drink is sold ("s food");
+--   4. if even that freed nothing, only trade goods are left: they are sold one kind at a time, the cheapest first by
+--      their AUCTION price (Auctionator's last scan; the vendor price only where the auction one is unknown), until the
+--      bot's chat says something was sold.
+-- ============================================================
+NS.replyHooks = {}   -- lower(name) -> function(msg), sees every whisper of that bot while set
+local replyHookFrame = CreateFrame("Frame")
+replyHookFrame:RegisterEvent("CHAT_MSG_WHISPER")
+replyHookFrame:SetScript("OnEvent", function(_, _, msg, sender)
+    local hook = NS.replyHooks[strlower(sender or "")]
+    if hook then hook(msg) end
+end)
+
+--- Green and blue gear of a bot's cached bags: links, best-effort (items the client has not cached yet are skipped).
+NS.GearToDisenchant = function(key)
+    local out = {}
+    local bags = AltBot_SavedVars.bagsCache and AltBot_SavedVars.bagsCache[key]
+    local skip = { INVTYPE_BAG = true, INVTYPE_QUIVER = true, INVTYPE_AMMO = true, INVTYPE_TABARD = true,
+        INVTYPE_BODY = true, INVTYPE_NON_EQUIP = true }
+    for _, item in pairs(bags or {}) do
+        if type(item) == "table" and item.link then
+            local _, _, quality, _, _, _, _, _, equipLoc = GetItemInfo(item.link)
+            if quality and (quality == 2 or quality == 3) and equipLoc and equipLoc ~= "" and not skip[equipLoc] then
+                out[#out + 1] = item.link
+            end
+        end
+    end
+    return out
+end
+
+--- Runs the three steps above for one bot. `valid()` is checked between the steps (false = the unload was dropped,
+--- nothing more is sent); `done(freed)` is called once, freed = something was disenchanted or sold.
+NS.MakeSpace = function(entry, valid, done)
+    local key = strlower(entry.name)
+    local gear = NS.GearToDisenchant(key)
+    local toSell, freed, finished = {}, false, false
+    local waitingCast, castFailed
+
+    local function clean(link)
+        local id = tonumber(link:match("item:(%d+)"))
+        local _, apiLink = GetItemInfo(id or 0)
+        return apiLink or link
+    end
+
+    local function finish()
+        if finished then return end
+        finished = true
+        NS.replyHooks[key] = nil
+        done(freed)
+    end
+
+    local function alive()   -- the unload was dropped meanwhile: nothing more is sent, the hook goes
+        if valid() then return true end
+        NS.replyHooks[key] = nil
+        return false
+    end
+
+    local function sellLines(msg)
+        if msg:match("^[Ss]elling") or msg:match("^[Ss]old") then freed = true end
+    end
+
+    -- Trade goods of the cached bags, the cheapest (per item, by the auction price) first.
+    local function materials()
+        local list = {}
+        local bags = AltBot_SavedVars.bagsCache and AltBot_SavedVars.bagsCache[key]
+        for _, item in pairs(bags or {}) do
+            if type(item) == "table" and item.link then
+                local _, _, _, _, _, itemType, _, _, _, _, vendor = GetItemInfo(item.link)
+                local t = itemType and strlower(itemType)
+                if t and NS.STACK_DELTA_BY_TYPE[t] then   -- the "trade goods" type in both spellings
+                    local price = Atr_GetAuctionBuyout and Atr_GetAuctionBuyout(item.link) or nil
+                    list[#list + 1] = { link = item.link, price = price or vendor or 0 }
+                end
+            end
+        end
+        table.sort(list, function(a, b) return a.price < b.price end)
+        return list
+    end
+
+    local function stageMaterials()
+        if not alive() then return end
+        if freed then return finish() end   -- the food already freed a slot
+        local list = materials()
+        if #list == 0 then return finish() end
+        Print(entry.name .. ": still no space, selling trade goods from the cheapest by auction price", "farm")
+        NS.replyHooks[key] = sellLines
+        local function sellFrom(i)
+            if not alive() then return end
+            if freed or i > math.min(#list, 30) then return finish() end
+            SendBotCommand(entry.name, "s " .. clean(list[i].link))
+            NS.After(1.5, function() sellFrom(i + 1) end)
+        end
+        sellFrom(1)
+    end
+
+    local function stageFood()
+        if not alive() then return end
+        if freed then return finish() end
+        Print(entry.name .. ": nothing disenchanted or sold, selling food and drink", "farm")
+        NS.replyHooks[key] = sellLines
+        SendBotCommand(entry.name, "s food")
+        NS.After(NS.STEP_DELAY, stageMaterials)
+    end
+
+    local function stageSell(i)
+        if not alive() then return end
+        local link = toSell[i]
+        if not link then return stageFood() end
+        NS.replyHooks[key] = sellLines
+        SendBotCommand(entry.name, "s " .. clean(link))
+        NS.After(1.5, function() stageSell(i + 1) end)
+    end
+
+    local function stageDisenchant(i)
+        if not alive() then return end
+        local link = gear[i]
+        if not link then
+            if #toSell > 0 then
+                Print(entry.name .. ": cannot disenchant " .. #toSell .. " item(s), selling them", "farm")
+            end
+            return stageSell(1)
+        end
+        waitingCast, castFailed = true, false
+        local decided = false
+        local function decide(ok)
+            if decided then return end
+            decided = true
+            waitingCast = false
+            if ok then
+                freed = true
+                -- the cast takes a few seconds; the next item only after it
+                NS.After(4, function() stageDisenchant(i + 1) end)
+            else
+                toSell[#toSell + 1] = link
+                NS.After(0.5, function() stageDisenchant(i + 1) end)
+            end
+        end
+        NS.replyHooks[key] = function(msg)
+            sellLines(msg)
+            if not waitingCast then return end
+            if strfind(msg, "Cannot cast", 1, true) or strfind(msg, "Unknown spell", 1, true)
+                or strfind(msg, "is failed", 1, true) then
+                decide(false)
+            elseif strfind(msg, "Casting", 1, true) then
+                decide(true)
+            end
+        end
+        SendBotCommand(entry.name, "cast 13262 " .. clean(link))
+        NS.After(6, function() decide(false) end)   -- no answer at all counts as "cannot"
+    end
+
+    stageDisenchant(1)
+end
+
+-- ============================================================
 -- Farm mode bag-full chain (one bot at a time — see the RPG watcher further
 -- below for the wander/grind side of Farm mode): "summon" (teleport to the
 -- master — see the file header's Farm-mode-doesn't-free-the-master note:
@@ -2166,25 +2327,51 @@ local function StartNextInQueue()
     -- abortIf drops the chain if something else moved the bot off "vendor".
     -- Sell, then an extra "stats" only if the bot actually sold something
     -- (see NS.SellAndRecheckSteps) so the board's bag count catches up.
-    local sellSteps = NS.SellAndRecheckSteps(NS.STEP_DELAY, entry)
+    local sold = false   -- read off the chat: the bot said "Selling [item]" / "Sold ..."
+    local function stillMine() return entry.step == "vendor" end
+    local function unloadFinished()
+        Print(entry.name .. ": unload complete, resuming grind", "farm")
+        -- bagFree/bagTotal are deliberately left as they were (not reset
+        -- to nil -> "?") — the board keeps showing e.g. 0/40 until the
+        -- next "stats" reply replaces it, so the bags-window click target
+        -- always has a real slot count behind it (per explicit user
+        -- direction).
+        entry.step = "idle"
+        NS.active = nil
+        StartNextInQueue()
+        if NS.RefreshPanel then NS.RefreshPanel() end
+    end
+    -- the second half: a fresh "stats" only when something was really freed, the check-up, the wander
+    local function tail(freed)
+        if not stillMine() then return end
+        NS.SendBotChain(entry.name, {
+            { cmd = function() return freed and "stats" or nil end },
+            NS.CheckupStep(entry, "bags dropped"),
+            -- "wander random" (not "go grind" directly) — same reasoning as
+            -- the summon/no-recognized-status branch of the rpg-status
+            -- dispatch above: the bot just teleported back from the vendor,
+            -- so it needs to re-explore before a grind position is valid
+            -- again, per explicit user direction ("так же для сброса сумок
+            -- и смерти, если мы в фарм режиме, то в конце rpg status wander
+            -- random"). Skipped for one parked via the board's top row.
+            { cmd = function()
+                if entry.farmHeld then return nil end
+                return "rpg status wander random"
+            end },
+        }, { abortIf = function() return not stillMine() end, onDone = unloadFinished })
+    end
     NS.SendBotChain(entry.name, {
         NS.SummonStep(entry),   -- confirmed by being tradeable, retried if not
-        sellSteps[1],
-        sellSteps[2],
-        NS.CheckupStep(entry, "bags dropped"),
-        -- "wander random" (not "go grind" directly) — same reasoning as
-        -- the summon/no-recognized-status branch of the rpg-status
-        -- dispatch above: the bot just teleported back from the vendor,
-        -- so it needs to re-explore before a grind position is valid
-        -- again, per explicit user direction ("так же для сброса сумок
-        -- и смерти, если мы в фарм режиме, то в конце rpg status wander
-        -- random"). Skipped for one parked via the board's top row.
         { cmd = function()
-            if entry.farmHeld then return nil end
-            return "rpg status wander random"
-        end },
+              sold = false
+              entry.stepTimer = 0
+              return NS.SellCommand()
+          end, wait = NS.STEP_DELAY,
+          listen = function(msg)
+              if msg:match("^[Ss]elling") or msg:match("^[Ss]old") then sold = true end
+          end },
     }, {
-        abortIf = function() return entry.step ~= "vendor" end,   -- chain moved on/cancelled
+        abortIf = function() return not stillMine() end,   -- chain moved on/cancelled
         onFail = function()
             -- The bot never became tradeable after the summon retries —
             -- give up on this unload, free the slot for the next bot; the
@@ -2196,16 +2383,11 @@ local function StartNextInQueue()
             if NS.RefreshPanel then NS.RefreshPanel() end
         end,
         onDone = function()
-            Print(entry.name .. ": unload complete, resuming grind", "farm")
-            -- bagFree/bagTotal are deliberately left as they were (not reset
-            -- to nil -> "?") — the board keeps showing e.g. 0/40 until the
-            -- next "stats" reply replaces it, so the bags-window click target
-            -- always has a real slot count behind it (per explicit user
-            -- direction).
-            entry.step     = "idle"
-            NS.active = nil
-            StartNextInQueue()
-            if NS.RefreshPanel then NS.RefreshPanel() end
+            -- The verdict from the chat, not from a new "stats": sold something = space came free; nothing sold =
+            -- disenchant the green/blue gear, sell what cannot be, then food and drink (NS.MakeSpace).
+            if sold then return tail(true) end
+            Print(entry.name .. ": the sale freed nothing, making space", "farm")
+            NS.MakeSpace(entry, stillMine, tail)
         end,
     })
     if NS.RefreshPanel then NS.RefreshPanel() end
@@ -7112,6 +7294,22 @@ NS.ShowItemCellMenu = function(cell)
             info.text = "Deposit"
             info.func = function()
                 SendBotCommand(botName, "guild bank " .. link)
+                RemoveBagsItemOptimistically(botName, cell.itemLink)
+            end
+            UIDropDownMenu_AddButton(info)
+        end
+
+        -- Disenchant (per explicit user direction): the bot's own custom-cast command ("cast <spell> <item>", spell 13262
+        -- as its own "disenchant random item" action uses it). Shown only for a bot that knows the spell (its cached
+        -- spell list) and for gear of green quality or better; works on soulbound items too, so it stands outside the
+        -- soulbound block above. The item is destroyed, the materials appear in the bags (synced when the window closes).
+        local _, _, quality, _, _, _, _, _, equipLoc = GetItemInfo(link)
+        local botEntry = NS.bots[strlower(botName)]
+        if botEntry and quality and quality >= 2 and equipLoc and equipLoc ~= ""
+            and NS.BotKnowsSpell(botEntry, "disenchant") == true then
+            info.text = "Disenchant"
+            info.func = function()
+                SendBotCommand(botName, "cast 13262 " .. link)
                 RemoveBagsItemOptimistically(botName, cell.itemLink)
             end
             UIDropDownMenu_AddButton(info)

@@ -589,3 +589,4 @@ function GetTradePlayerItemInfo(slot) end
 ---@param slot number
 ---@return string? name, string? texture, number? count
 function GetTradeTargetItemInfo(slot) end
+function GetTradeTargetItemLink(slot) end

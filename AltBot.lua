@@ -274,6 +274,8 @@ NS.CLASS_NAME_ALIASES = {
 --   farmHeld      = boolean|nil,   -- Farm mode only: user clicked this bot's top (XP-gain) board row to pull
 --                                   -- it to the master and park it there (reset botAI, no rpg status
 --                                   -- polling/commands) until clicked again; cleared on any mode change
+--   questFree     = boolean|nil,   -- Quest mode only, the mirror: this bot was freed (sent farming on its own) by a
+--                                   -- click on its top row; lit by the same border, cleared on any mode change
 -- }
 NS.bots = {}
 NS.rosterOrder = {}   -- nameKey list in a stable, typed-in order (drives panel column order)
@@ -831,15 +833,39 @@ NS.SetFarmHeld = function(entry, on)
     cv.farmHeld[strlower(entry.name)] = entry.farmHeld
 end
 
---- Whether a bot's bags window may do Trade/Sell/Equip/etc right now. Outside
---- Farm mode always. In Farm mode only for a bot parked via the board's top
+--- The mirror image for Quest mode (per explicit user direction: "полная симметрия"): a bot FREED from the quest group by
+--- a click on its board column's top row (entry.questFree) is sent farming on its own and is shown by the same white top
+--- border; a second click summons it back. Persisted per character (NS.CharVars().questFree), restored on /reload.
+NS.SetQuestFree = function(entry, on)
+    entry.questFree = on and true or nil
+    local cv = NS.CharVars()
+    cv.questFree = cv.questFree or {}
+    cv.questFree[strlower(entry.name)] = entry.questFree
+end
+
+--- Whether this bot is farming on its own right now: every bot of Farm mode that is not parked, and a bot freed in Quest mode.
+NS.BotFarming = function(entry)
+    local mode = AltBot_SavedVars.mode
+    if mode == NS.MODE_FARM then return not entry.farmHeld end
+    return mode == NS.MODE_QUEST and entry.questFree == true
+end
+
+--- Whether a bot's bags window may do Trade/Sell/Equip/etc right now. Always
+--- in Quest mode, except for a bot freed there, which counts like a grinding
+--- one below. In Farm mode only for a bot parked via the board's top
 --- row (entry.farmHeld, i.e. individually summoned) that is also actually
 --- tradeable at this moment (NS.BotNearMaster) — every other grinding bot has
 --- no reachable vendor/trade partner, so its bags window stays view-only.
 NS.CanWorkBotBags = function(botName)
-    if AltBot_SavedVars.mode ~= NS.MODE_FARM then return true end
+    local mode = AltBot_SavedVars.mode
     local entry = NS.bots[strlower(botName)]
-    return entry ~= nil and entry.farmHeld == true and NS.BotNearMaster(botName)
+    if mode == NS.MODE_FARM then
+        return entry ~= nil and entry.farmHeld == true and NS.BotNearMaster(botName)
+    end
+    if mode == NS.MODE_QUEST and entry and entry.questFree then
+        return NS.BotNearMaster(botName)
+    end
+    return true
 end
 
 --- Critical chain step: "reset botAI", confirmed by the bot's own "AI was
@@ -1148,6 +1174,10 @@ local function BuildRosterFromNames()
             if held and held[key] and AltBot_SavedVars.mode == NS.MODE_FARM then
                 NS.bots[key].farmHeld = true
             end
+            local free = NS.CharVars().questFree
+            if free and free[key] and AltBot_SavedVars.mode == NS.MODE_QUEST then
+                NS.bots[key].questFree = true
+            end
         end
         NS.rosterOrder[#NS.rosterOrder + 1] = key
         -- Starts this bot's own independent poll loop exactly once, ever,
@@ -1328,6 +1358,8 @@ NS.wildLogoutFrame:SetScript("OnEvent", function()
         for _, byKey in pairs(sv.windowPoints or {}) do byKey[key] = nil end
         local held = NS.CharVars().farmHeld
         if held then held[key] = nil end
+        local free = NS.CharVars().questFree
+        if free then free[key] = nil end
     end
 end)
 
@@ -1675,7 +1707,7 @@ NS.CheckReviveBots = function(onlyUnit)
             entry.wasDead = false
             entry.trackedKind = nil   -- dying drops the tracking: cast it again
             NS.ApplyTracking(entry)
-            if AltBot_SavedVars.mode == NS.MODE_FARM then
+            if AltBot_SavedVars.mode == NS.MODE_FARM or entry.questFree then
                 -- The bot's been sitting summoned at the master this whole
                 -- time it was dead (see the UnitIsDeadOrGhost branch above),
                 -- so it's right there at a vendor-reachable spot — sell off
@@ -1874,7 +1906,7 @@ NS.StartBotPollLoop = function(key)
 
         -- A bot parked via the board's top row (entry.farmHeld) still gets
         -- "stats" polled, but no "rpg status" - nothing to grind/wander over.
-        local farmMode = AltBot_SavedVars.mode == NS.MODE_FARM and not entry.farmHeld
+        local farmMode = NS.BotFarming(entry)   -- Farm mode (not parked) or a bot freed in Quest mode
 
         -- Sends a request (stats or rpg status); it's re-sent every STATS_TIMEOUT
         -- while there's still more than that left of the slot (so only with a
@@ -2222,7 +2254,7 @@ local function QuestModeSpamVendor()
     local i = 0
     for _, key in ipairs(NS.rosterOrder) do
         local entry = NS.bots[key]
-        if entry and NS.UnloadAllowed(entry) then
+        if entry and not entry.questFree and NS.UnloadAllowed(entry) then
             NS.NoteUnloadTry(entry)
             NS.After(i * NS.STAGGER_DELAY, function()
                 SendBotCommand(entry.name, NS.SellCommand())
@@ -2245,8 +2277,8 @@ NS.OnBagsFull = function(key, entry)
     -- handling for an unconfigured roster if that ever changes.
     local mode = AltBot_SavedVars.mode
     if not mode then return end
-    if mode == NS.MODE_FARM then
-        EnqueueForUnload(key, entry)
+    if mode == NS.MODE_FARM or entry.questFree then
+        EnqueueForUnload(key, entry)   -- a bot freed in Quest mode unloads like a farming one
     elseif mode == NS.MODE_QUEST then
         QuestModeSpamVendor()
     end
@@ -2302,6 +2334,12 @@ local function ApplyStrategyForMode(mode, previousMode)
         for _, entry in pairs(NS.bots) do NS.SetFarmHeld(entry, false) end
         NS.CharVars().farmHeld = nil   -- also drops marks of bots no longer on the roster
     end
+    -- the same for the bots freed in Quest mode (entry.questFree)
+    local keepFree = mode == NS.MODE_QUEST and previousMode == nil
+    if not keepFree then
+        for _, entry in pairs(NS.bots) do NS.SetQuestFree(entry, false) end
+        NS.CharVars().questFree = nil
+    end
 
     if mode == NS.MODE_QUEST then
         if previousMode == NS.MODE_FARM then
@@ -2330,7 +2368,11 @@ local function ApplyStrategyForMode(mode, previousMode)
         else
             for _, key in ipairs(NS.rosterOrder) do
                 local entry = NS.bots[key]
-                if entry then
+                if entry and entry.questFree then
+                    -- freed before the /reload: stays on the farming strategy
+                    NS.CancelBotChains(entry.name)
+                    NS.SendBotChain(entry.name, { NS.FarmStrategyStep() }, { onFail = ChainFailPrinter(entry) })
+                elseif entry then
                     NS.CancelBotChains(entry.name)
                     local steps = { NS.ResetStep() }
                     for _, st in ipairs(NS.SavedStanceSteps()) do steps[#steps + 1] = st end
@@ -3237,6 +3279,7 @@ end
 --- ("выдав ему в чат summon, можно сразу же выдавать s").
 NS.ToggleFarmHold = function(key)
     local entry = NS.bots[key]
+    if entry and NS.EffectiveMode() == NS.MODE_QUEST then return NS.ToggleQuestFree(key) end
     if not entry or NS.EffectiveMode() ~= NS.MODE_FARM then return end
 
     if not entry.farmHeld then
@@ -3289,6 +3332,42 @@ NS.ToggleFarmHold = function(key)
                 Print(entry.name .. ": '" .. tostring(failedCmd) .. "' not confirmed, farm strategy not set", "farm")
             end,
         })
+    end
+    if NS.RefreshPanel then NS.RefreshPanel() end
+end
+
+--- Quest mode, the mirror of NS.ToggleFarmHold (per explicit user direction): the first click on the column's top row
+--- FREES this bot - it is put on the farming strategy (verified) and sent exploring, so it grinds on its own while the
+--- others stay with the master; the second click summons it back (reset botAI, summon, the saved stance). The column's
+--- top border is lit while it is free.
+NS.ToggleQuestFree = function(key)
+    local entry = NS.bots[key]
+    if not entry or NS.EffectiveMode() ~= NS.MODE_QUEST then return end
+
+    NS.CancelBotChains(entry.name)
+    if not entry.questFree then
+        NS.SetQuestFree(entry, true)
+        entry.wanderRandomStreak = 0
+        entry.wanderRandomThreshold = nil
+        NS.SendBotChain(entry.name, {
+            NS.FarmStrategyStep(),
+            { cmd = "rpg status wander random" },
+        }, {
+            onFail = function(failedCmd)
+                -- never got on the farming strategy: not marked as free, it stays with the group
+                Print(entry.name .. ": '" .. tostring(failedCmd) .. "' not confirmed, not freeing", "farm")
+                NS.SetQuestFree(entry, false)
+                if NS.RefreshPanel then NS.RefreshPanel() end
+            end,
+        })
+    else
+        NS.SetQuestFree(entry, false)
+        entry.awaitingRpgStatus = false
+        entry.awaitingRpgAction = nil
+        entry.step = "idle"   -- a half-done unload must not hold the bot back
+        local steps = { NS.ResetStep(), NS.SummonStep(entry) }
+        for _, st in ipairs(NS.SavedStanceSteps()) do steps[#steps + 1] = st end
+        NS.SendBotChain(entry.name, steps, { onFail = ChainFailPrinter(entry) })
     end
     if NS.RefreshPanel then NS.RefreshPanel() end
 end
@@ -3762,18 +3841,25 @@ local function FillBotColumn(f, key, entry)
 
     -- Top row: park/release this bot (Farm mode only, see NS.ToggleFarmHold); the
     -- top border mirrors entry.farmHeld.
+    -- Quest mode is the mirror (NS.ToggleQuestFree): the border is lit while the bot is FREE (farming on its own).
     local inFarm = NS.EffectiveMode() == NS.MODE_FARM
+    local inQuest = NS.EffectiveMode() == NS.MODE_QUEST
     f.xpGainBtn:SetScript("OnClick", function() NS.ToggleFarmHold(key) end)
     f.xpGainBtn:SetScript("OnEnter", function(self)
-        if not inFarm then return end
+        if not (inFarm or inQuest) then return end
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:SetText(entry.name, 1, 1, 1)
-        GameTooltip:AddLine(entry.farmHeld and "Click to resume farming"
-            or "Click to summon and stop farming", 0.8, 0.8, 0.8)
+        if inFarm then
+            GameTooltip:AddLine(entry.farmHeld and "Click to resume farming"
+                or "Click to summon and stop farming", 0.8, 0.8, 0.8)
+        else
+            GameTooltip:AddLine(entry.questFree and "Click to summon back"
+                or "Click to free: it goes farming", 0.8, 0.8, 0.8)
+        end
         GameTooltip:Show()
     end)
     f.xpGainBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    if inFarm and entry.farmHeld then f.holdBorder:Show() else f.holdBorder:Hide() end
+    if (inFarm and entry.farmHeld) or (inQuest and entry.questFree) then f.holdBorder:Show() else f.holdBorder:Hide() end
 
     if entry.wild then
         f.xpGain:SetText("+0%")   -- a wild-class bot has no hourly gain; a fixed "+0%" keeps the rows aligned
@@ -4034,9 +4120,13 @@ NS.ShowBoardMenu = function(col)
         items = {}
         -- The first item exists only in Farm mode (per explicit user direction): "Summon" parks the bot next to
         -- the master, and for a bot that is already parked it reads "Free" (puts it back to work).
+        -- In Quest mode the same item is the mirror: "Free" sends the bot farming, "Summon" calls a freed one back.
+        local entry = NS.bots[key]
         if inFarm then
-            local entry = NS.bots[key]
             items[#items + 1] = { text = (entry and entry.farmHeld) and "Free" or "Summon",
+                func = function() NS.ToggleFarmHold(key) end }
+        elseif NS.EffectiveMode() == NS.MODE_QUEST then
+            items[#items + 1] = { text = (entry and entry.questFree) and "Summon" or "Free",
                 func = function() NS.ToggleFarmHold(key) end }
         end
         for _, it in ipairs({
@@ -6544,7 +6634,12 @@ NS.tradeResultFrame:SetScript("OnEvent", function(_, _, msg)
     for _, list in pairs(offers) do pending = pending + #list end
     NS.Trace("bags", string.format("trade %s, %d offered stack(s) pending", cancelled and "cancelled" or "completed", pending))
     NS.tradeOffers = {}
-    if not cancelled then return end
+    local queued = NS.queuedTrade
+    NS.queuedTrade = nil
+    if not cancelled then
+        if queued then NS.After(0.7, function() NS.RunQueuedTrade(queued) end) end
+        return
+    end
     for key, list in pairs(offers) do
         for _, offer in ipairs(list) do NS.RestoreTradeOffer(key, offer) end
         local f = NS.botBagsFrames[key]
@@ -6756,6 +6851,19 @@ end
 --- TRADE_SHOW confirms it's open with this bot (same two-step flow the
 --- menu's own "Trade" entry uses — "t" is a silent no-op with no trade
 --- window open).
+--- True when the open trade window already holds an item with this link's item id on the bot's side. The bot's "t <link>"
+--- picks the first item of that id, i.e. the one already offered, and the server then EMPTIES that trade slot instead of
+--- adding the second copy (recorded: two Iron Lockboxes, second Trade click -> "theirs: (empty)").
+NS.ItemInOpenTrade = function(link)
+    local id = link and link:match("item:(%d+)")
+    if not id or not (TradeFrame and TradeFrame:IsShown()) then return false end
+    for slot = 1, 6 do
+        local offered = GetTradeTargetItemLink(slot)
+        if offered and offered:match("item:(%d+)") == id then return true end
+    end
+    return false
+end
+
 NS.TradeCellItem = function(cell)
     if not cell.itemLink then return end
     local botName = FindCellBotName(cell)
@@ -6774,6 +6882,13 @@ NS.TradeCellItem = function(cell)
         local recipientName = TradeFrame and TradeFrame:IsShown() and TradeFrameRecipientNameText
             and TradeFrameRecipientNameText:GetText()
         if recipientName and strlower(recipientName) == key then
+            if NS.ItemInOpenTrade(link) then
+                -- one trade window cannot take a second copy (see NS.ItemInOpenTrade): it goes in the NEXT trade,
+                -- opened by itself as soon as this one is completed
+                NS.queuedTrade = { key = key, botName = botName, link = link, rawLink = cell.itemLink, count = cell.stackCount }
+                Print("Второй такой же предмет в этот обмен не положить: уйдёт следующим обменом сразу после этого.", "inventory")
+                return
+            end
             SendBotCommand(botName, "t " .. link)
         else
             pendingTradeOffer = { key = key, link = link }
@@ -6787,6 +6902,16 @@ NS.TradeCellItem = function(cell)
     -- the cell stays wrong until the window is closed and reopened — an
     -- accepted tradeoff for not hammering the bot with a fetch per click.
     RemoveBagsItemOptimistically(botName, cell.itemLink, not sellMode and cell.stackCount or nil)
+end
+
+--- The copy of an item that could not go into the trade already open: a fresh trade with the same bot is opened and the
+--- link offered once TRADE_SHOW confirms it (same two steps as a normal left click).
+NS.RunQueuedTrade = function(q)
+    if TradeFrame and TradeFrame:IsShown() then return end
+    if not NS.CanWorkBotBags(q.botName) then return end
+    pendingTradeOffer = { key = q.key, link = q.link }
+    InitiateTrade(q.botName)
+    RemoveBagsItemOptimistically(q.botName, q.rawLink, q.count)
 end
 
 --- Opens the right-click context menu for an item cell. A complete no-op in

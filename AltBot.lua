@@ -1707,6 +1707,7 @@ NS.CheckReviveBots = function(onlyUnit)
             entry.wasDead = false
             entry.trackedKind = nil   -- dying drops the tracking: cast it again
             NS.ApplyTracking(entry)
+            NS.BotCheckup(entry, "revived")
             if AltBot_SavedVars.mode == NS.MODE_FARM or entry.questFree then
                 -- The bot's been sitting summoned at the master this whole
                 -- time it was dead (see the UnitIsDeadOrGhost branch above),
@@ -2170,6 +2171,7 @@ local function StartNextInQueue()
         NS.SummonStep(entry),   -- confirmed by being tradeable, retried if not
         sellSteps[1],
         sellSteps[2],
+        NS.CheckupStep(entry, "bags dropped"),
         -- "wander random" (not "go grind" directly) — same reasoning as
         -- the summon/no-recognized-status branch of the rpg-status
         -- dispatch above: the bot just teleported back from the vendor,
@@ -2361,6 +2363,7 @@ local function ApplyStrategyForMode(mode, previousMode)
                         NS.SummonStep(entry),
                     }
                     for _, st in ipairs(NS.SavedStanceSteps()) do steps[#steps + 1] = st end
+                    steps[#steps + 1] = NS.CheckupStep(entry, "mode change")
                     NS.SendBotChain(entry.name, steps, { onFail = ChainFailPrinter(entry) })
                 end
             end
@@ -2376,6 +2379,7 @@ local function ApplyStrategyForMode(mode, previousMode)
                     NS.CancelBotChains(entry.name)
                     local steps = { NS.ResetStep() }
                     for _, st in ipairs(NS.SavedStanceSteps()) do steps[#steps + 1] = st end
+                    steps[#steps + 1] = NS.CheckupStep(entry, "mode change")
                     NS.SendBotChain(entry.name, steps, { onFail = ChainFailPrinter(entry) })
                 end
             end
@@ -2401,7 +2405,7 @@ local function ApplyStrategyForMode(mode, previousMode)
                 })
             elseif entry then
                 NS.CancelBotChains(entry.name)
-                NS.SendBotChain(entry.name, { NS.FarmStrategyStep() },
+                NS.SendBotChain(entry.name, { NS.FarmStrategyStep(), NS.CheckupStep(entry, "mode change") },
                     { onFail = ChainFailPrinter(entry) })
             end
         end
@@ -5106,6 +5110,7 @@ bagsItemsTicker:SetScript("OnUpdate", function(self, dt)
         if collecting.timer >= NS.STATS_TIMEOUT then
             bagsItemsAwaiting[key] = nil
             NS.CheckBotSupplies(key, collecting.items)
+            NS.After(1, function() NS.BotCheckup(NS.bots[key], "items refreshed") end)
             -- A poll-cycle fetch NEVER touches the cache (or repaints) while this bot's
             -- bags window is open: the user is working in it - selling, trading - and the
             -- reply, which doesn't know about those actions yet, brought sold items back
@@ -6902,6 +6907,143 @@ NS.TradeCellItem = function(cell)
     -- the cell stays wrong until the window is closed and reopened — an
     -- accepted tradeoff for not hammering the bot with a fetch per click.
     RemoveBagsItemOptimistically(botName, cell.itemLink, not sellMode and cell.stackCount or nil)
+end
+
+-- ============================================================
+-- Bot check-up (per explicit user direction): on a mode change, after the bags were dropped and after a death every bot
+-- gets a short supplies check - a hunter has his ammo put in the ammo slot ("e <link>": the bot's equip action sets the
+-- ammo id, and equipping the same ammo again is harmless), a rogue gets his poisons put on the weapons ("u <poison>":
+-- the bot's use-item action picks a weapon that has no temporary enchant itself and does nothing when every weapon
+-- already carries one, so "if there is none on the weapon" is decided by the bot, not guessed here). Everything is read
+-- from the bags cache (the last "items" lists), nothing is asked from the server first.
+-- ============================================================
+NS.POISON_FAMILIES = {   -- item ids, best rank first (the bot's own ImbueAction uses the same families)
+    instant = { 43231, 43230, 21927, 8928, 8927, 8926, 6950, 6949, 6947 },
+    deadly  = { 43233, 43232, 22054, 22053, 20844, 8985, 8984, 2893, 2892 },
+}
+
+--- The best ammo of the bot's cached bags for the weapon in its ranged slot (arrows for bows and crossbows, bullets for
+--- guns; any ammo when the weapon is not known): highest item level, then the biggest stack. Returns link, count.
+NS.BestAmmoFor = function(key)
+    local bags = AltBot_SavedVars.bagsCache and AltBot_SavedVars.bagsCache[key]
+    if not bags then return nil end
+    local wantArrows, wantBullets
+    local weapon = NS.botEquipLinks[key] and NS.botEquipLinks[key][18]
+    if weapon then
+        local _, _, _, _, _, _, wsub = GetItemInfo(weapon)
+        wsub = wsub and strlower(wsub) or ""
+        if strfind(wsub, "bow", 1, true) or strfind(wsub, "лук", 1, true) or strfind(wsub, "арбалет", 1, true) then
+            wantArrows = true
+        elseif strfind(wsub, "gun", 1, true) or strfind(wsub, "огнестрел", 1, true) then
+            wantBullets = true
+        end
+    end
+    local bestLink, bestCount, bestIlvl = nil, 0, -1
+    for _, item in pairs(bags) do
+        if type(item) == "table" and item.link and NS.IsAmmoItem(NS.SupplyItemInfo(item.link)) then
+            local _, _, _, ilvl, _, _, asub = GetItemInfo(item.link)
+            asub = asub and strlower(asub) or ""
+            local isArrow = strfind(asub, "arrow", 1, true) or strfind(asub, "стрел", 1, true)
+            local isBullet = strfind(asub, "bullet", 1, true) or strfind(asub, "пул", 1, true)
+            local fits = true
+            if wantArrows and isBullet then fits = false end
+            if wantBullets and isArrow then fits = false end
+            if fits then
+                ilvl = ilvl or 0
+                if ilvl > bestIlvl or (ilvl == bestIlvl and (item.count or 0) > bestCount) then
+                    bestLink, bestCount, bestIlvl = item.link, item.count or 0, ilvl
+                end
+            end
+        end
+    end
+    return bestLink, bestCount
+end
+
+--- The best cached poison link of a family ("instant"/"deadly"), or nil.
+NS.BestPoisonFor = function(key, family)
+    local bags = AltBot_SavedVars.bagsCache and AltBot_SavedVars.bagsCache[key]
+    if not bags then return nil end
+    local have = {}
+    for _, item in pairs(bags) do
+        if type(item) == "table" and item.link then
+            local id = tonumber(item.link:match("item:(%d+)"))
+            if id then have[id] = item.link end
+        end
+    end
+    for _, id in ipairs(NS.POISON_FAMILIES[family]) do
+        if have[id] then return have[id] end
+    end
+    return nil
+end
+
+-- THE REGISTRY (per explicit user direction: many flat events, no class hierarchy in the event code): every kind of
+-- bot registers its own check-up handlers in NS.CHECKUPS[CLASS] = { { name, on, run }, ... }. `on` lists the events the
+-- handler listens to: `true` = every time, a number = at most once per that many seconds per bot (a periodic event).
+-- The event sources (a mode change, the bags dropped, a revive, a fresh "items" list ...) only call
+-- NS.BotCheckup(entry, "<event>") and know nothing about classes - a new class (a druid, say) is one more registry entry.
+-- A handler gets (entry, key, event) and sends whatever commands it needs; it may do nothing.
+NS.CHECKUPS = {}
+NS.RegisterCheckup = function(class, handler)
+    NS.CHECKUPS[class] = NS.CHECKUPS[class] or {}
+    table.insert(NS.CHECKUPS[class], handler)
+end
+
+NS.CHECKUP_EVENTS = { "mode change", "bags dropped", "revived", "items refreshed" }   -- the flat list of events
+
+--- Runs the handlers registered for the bot's class that listen to `event`.
+NS.BotCheckup = function(entry, event)
+    if not entry or not entry.class then return end
+    local handlers = NS.CHECKUPS[entry.class]
+    if not handlers or NS.EffectiveMode() == NS.MODE_SOLO then return end
+    if NS.BotInCombat(entry.name) then return end
+    local key = strlower(entry.name)
+    local now = GetTime()
+    entry.checkupAt = entry.checkupAt or {}
+    for _, h in ipairs(handlers) do
+        local rule = h.on[event]
+        if rule then
+            local last = entry.checkupAt[h.name]
+            if rule == true or not last or now - last >= rule then
+                entry.checkupAt[h.name] = now
+                h.run(entry, key, event)
+            end
+        end
+    end
+end
+
+-- Hunter: the ammo goes into the ammo slot ("e <link>" - the bot cannot be asked what stands there, there is no whisper
+-- keyword for the ammo slot, so it is simply put there again; the same ammo twice does no harm).
+NS.RegisterCheckup("HUNTER", {
+    name = "ammo",
+    on = { ["mode change"] = true, ["bags dropped"] = true, ["revived"] = true, ["items refreshed"] = 300 },
+    run = function(entry, key, event)
+        local link = NS.BestAmmoFor(key)
+        if not link then return end
+        NS.Trace("checkup", string.format("%s (%s): ammo %s", entry.name, event, link))
+        SendBotCommand(entry.name, "e " .. CleanItemLink(link))
+    end,
+})
+
+-- Rogue: poisons on the weapons ("u <poison>": the bot picks a weapon without a temporary enchant itself and does nothing
+-- when every weapon already carries one). Instant on one weapon, deadly on the other - two casts, so the second waits.
+NS.RegisterCheckup("ROGUE", {
+    name = "poison",
+    on = { ["mode change"] = true, ["bags dropped"] = true, ["revived"] = true, ["items refreshed"] = 600 },
+    run = function(entry, key, event)
+        local first = NS.BestPoisonFor(key, "instant") or NS.BestPoisonFor(key, "deadly")
+        local second = NS.BestPoisonFor(key, "deadly")
+        if not first then return end
+        NS.Trace("checkup", string.format("%s (%s): poison %s", entry.name, event, first))
+        SendBotCommand(entry.name, "u " .. CleanItemLink(first))
+        if second and second ~= first then
+            NS.After(4, function() SendBotCommand(entry.name, "u " .. CleanItemLink(second)) end)
+        end
+    end,
+})
+
+--- A chain step that runs the check-up (it sends its own commands, so the step itself sends nothing).
+NS.CheckupStep = function(entry, why)
+    return { cmd = function() NS.BotCheckup(entry, why); return nil end }
 end
 
 --- The copy of an item that could not go into the trade already open: a fresh trade with the same bot is opened and the

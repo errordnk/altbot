@@ -1088,6 +1088,15 @@ NS.EffectiveMode = function()
     return AltBot_SavedVars.mode
 end
 
+--- True when nobody is tracked (the roster text names no bot). EffectiveMode() reads nil then, which is the same
+--- state as Solo for the user - the action bar lights the Solo button for it (per explicit user direction: "при
+--- загрузке с пустым ростером режим соло, но иконка соло не подсвечена как выбранная").
+NS.RosterIsEmpty = function()
+    if not AltBot_SavedVars then return true end
+    local names = ParseRosterText(AltBot_SavedVars.rosterText or "").botNames
+    return not names or #names == 0
+end
+
 --- Rebuilds NS.bots/NS.rosterOrder — and, as of this rewrite, botNames/
 --- classCounts themselves — from AltBot_SavedVars.rosterText (the ONE
 --- account-wide source of truth for "what's typed in the Roster textarea").
@@ -13268,6 +13277,16 @@ for i, def in ipairs(MODE_ROW) do
             -- is shared across the whole account (per explicit user
             -- direction: "режим моды должен быть один для аккаунта"), same
             -- field DisbandRoster sets to MODE_SOLO.
+            -- With nobody in the roster (neither saved nor typed into the roster editor yet) there is nothing to
+            -- summon or send farming: an error in the chat, the mode stays as it is, i.e. Solo (per explicit user
+            -- direction: "если жать режим квест или фарм при пустом ростере, пишем ошибку в чат и режим соло
+            -- остается активным").
+            local typed = ParseRosterText(botTextarea:GetText() or "").botNames
+            if NS.RosterIsEmpty() and (not typed or #typed == 0) then
+                NS.SystemShout("AltBot", def.title .. ": the roster is empty - add bot names in the roster editor first (Solo stays)")
+                NS.RefreshActionBar()
+                return
+            end
             AltBot_SavedVars.mode = def.mode
             NS.SaveForm()
             NS.RefreshForm()
@@ -13403,7 +13422,7 @@ NS.RefreshActionBar = function()
     for i, def in ipairs(MODE_ROW) do
         modeBtns[i]:SetActive(def.mode == mode)
     end
-    disbandBtn:SetActive(mode == NS.MODE_SOLO)
+    disbandBtn:SetActive(mode == NS.MODE_SOLO or NS.RosterIsEmpty())   -- an empty roster IS Solo
     ReflowActionBar()
 end
 

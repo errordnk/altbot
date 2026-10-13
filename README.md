@@ -22,7 +22,7 @@ command works when you type it to a bot by hand, the addon can send it.
 - [Requirements](#requirements) · [Installation](#installation) · [Quick start](#quick-start)
 - [The action bar](#the-action-bar) · [Screen space](#screen-space) · [Keyboard shortcuts](#keyboard-shortcuts) · [Modes](#modes) · [The stats board](#the-stats-board)
 - [Per-bot windows](#per-bot-windows) · [Settings and chat control](#settings-and-chat-control)
-- [Vendors](#vendors) · [Trainers](#trainers) · [Slash commands](#slash-commands) · [Saved data](#saved-data) · [Limitations](#limitations)
+- [Vendors](#vendors) · [Trainers](#trainers) · [Saved data](#saved-data) · [Limitations](#limitations)
 - [Development](#development) · [Credits](#credits) · [License](#license)
 
 ## Requirements
@@ -148,13 +148,54 @@ Shift-click on an item, spell or quest puts its link into the chat.
 - **Quest log** - unfinished quests **grouped by zone**, completed ones last. Columns: quest id, `[N]` (how many raid members,
   bots and the master, have the quest), the quest link and its Russian title. Right click **drops** the quest on that bot.
   The master's *native* quest log shows the same raid-wide `[N]` instead of the group-only number.
-- **Spellbook** - the bot's spells in five groups: its three talent trees (English and Russian name), *Professions* and
+- **Spellbook&&Spec** - the bot's spells in five groups: its three talent trees (English and Russian name), *Professions* and
   *Other*. Left click makes the bot cast the spell, right click creates a macro `/w <bot> cast <spell>` and puts it on your
-  cursor, so you can drop it on an action bar and fire it at the right moment of a fight.
+  cursor, so you can drop it on an action bar and fire it at the right moment of a fight. The **first line** is the
+  bot's **specialization** dropdown (see [Talents and specializations](#talents-and-specializations)).
+
+## Talents and specializations
+
+The server spends talent points on its own at a level-up for *random* bots only, never for your alt-bots, so AltBot
+does it for them - **but only where you have chosen something**. While nothing is chosen the addon sends no talent
+command at all and the server's own behaviour stays (the **auto talents** checkbox switches the whole feature off).
+
+**Starting specialization of a class** - the **Talents** tab of the settings window (the tabs are at the bottom edge of
+the window): one dropdown per class with its specializations (PvE and PvP). It decides **only where the first talent
+point of a bot goes**, nothing more:
+
+- it is applied at the moment a bot **reaches level 10** (the level-up that takes it from 9 or lower to 10 or more), using
+  the setting of that moment - so a bot that is level 9 when you change it is affected;
+- bots that are **already level 10 or more are not touched**, and changing the setting never re-specs anybody: if the
+  shamans are set to *Elemental* and you switch the class to *Enhancement*, the existing shamans stay as they are and only
+  those that reach level 10 afterwards get *Enhancement*;
+- from that moment the bot has **its own choice** (below) and the class setting no longer matters for it.
+
+**One bot** - the **first line of its Spellbook&&Spec window**: a dropdown of the specializations **the server itself
+lists** for that bot (its answer to `talents spec list`, with the points per tree, for example `bm pve (54-12-5)` or
+`surv pvp (0-16-55)`; PvE and PvP ones). Choosing one sends it to the bot at once and keeps it for that bot: it is applied
+at every level-up from level 10 and checked as described below. This is also the way to fix **any border case** (a bot
+that passed level 10 while the addon was off or the game was closed, a bot that already has other talents, ...). There is
+no "reset" entry: pick another specialization or clear `AltBot_SavedVars.botTalentSpec[<bot>]`.
+
+**What is sent.** `talents apply <link>`, where the link is the Wowhead talent-calculator string of the chosen
+specialization (the part after the class in `https://www.wowhead.com/wotlk/talent-calc/<class>/<string>`), taken from the
+premade specs of mod-playerbots, one string per milestone level (60 and 80, for some classes also 40, 65 or 70). The
+**nearest milestone at or above the bot's level** is used - a level 30 bot gets the "60" string, a level 62 one the "80"
+string. The server resets the talents for free and learns them again, the biggest tree first and from the top down,
+until the points run out. A specialization name the addon does not know (a server with its own premade specs) is sent
+as `talents spec <name>`. After either command the bot resets its strategies, so the addon puts back what it had set
+(the farming strategy, follow/stay, the combat reaction).
+
+**Verification.** After a command the addon asks the bot `who` and compares the talents it reports (`a/b/c`) with the
+chosen specialization: the **same main tree** and **every available point spent** (level minus 9). On a mismatch the
+command is sent **again**, up to 3 times (each a few seconds after the previous one); if the bot still does not match it
+is named in the chat in red. The same check runs when the raid is formed (at most once in 10 minutes per bot), so a
+command that was lost or a manual respec is put right.
 
 ## Settings and chat control
 
-Click the gear on the action bar. At the top a small chart shows how much memory the addon itself uses (a measurement every
+Click the gear on the action bar. The window has two tabs at its bottom edge: **General** (this page) and **Talents**
+(see [Talents and specializations](#talents-and-specializations)). At the top a small chart shows how much memory the addon itself uses (a measurement every
 5 minutes, one bar per hour with the hourly average). Under the chart are two sliders: **Poll interval** (10-100 s,
 default 30; how often every bot is asked for `stats`, `rpg status` and `items`) and **Board scale** (50-150 %, default
 100). Below are the checkboxes:
@@ -169,6 +210,8 @@ default 30; how often every bot is asked for `stats`, `rpg status` and `items`) 
   shown. Your own manual whispers and chat are never hidden.
 - **dance** - in Quest mode the group is told `emote dance` every 10 s; the master announces it in `/s`.
 - **emotes** - in Quest mode, every 5 minutes one random bot makes a random animated emote.
+- **auto talents** - on by default; switches the whole talents feature off (the starting specialization, the level-up
+  command and the verification). With nothing chosen nothing is sent anyway.
 - **delete cache** - the addon starts every time as if it were the very first run (all saved data is wiped). Meant for debugging.
 
 ## Vendors
@@ -189,16 +232,12 @@ bot and skill - the skill, its cost and whether it was learned or is too expensi
 triggered only by the master's own deliberate visit to a trainer, never by a bot merely standing near one, so the bots
 do not spend gold for no visible reason.
 
-## Slash commands
-
-Only three diagnostic helpers: `/abfocus` (then point at some UI within 4 seconds - prints the frame under the cursor),
-`/abglobals Prefix` (lists global tables whose names start with Prefix) and `/abevent` (for 2 minutes describes every chat line
-containing "in combat" together with the chat event it came by).
-
 ## Saved data
 
 `AltBot_SavedVars` (account-wide): the roster text, the mode, follow/stay and reaction, window and board positions, settings,
-and caches (bags, equipment, `who`, quest lists, spell lists, last board numbers, hourly XP). Caches of **wild-class** bots are
+the talent choices (`talentSpec[CLASS]` - the starting specialization of a class, `botTalentSpec[bot]` - the choice of one
+bot, `talentsLevel[bot]` - the level it was last given talents for) and caches (bags, equipment, `who`, quest lists,
+spell lists, the specializations the server lists per bot, last board numbers, hourly XP). Caches of **wild-class** bots are
 erased at logout. The memory chart is not saved.
 
 ## Limitations

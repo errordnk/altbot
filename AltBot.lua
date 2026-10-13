@@ -2670,6 +2670,17 @@ NS.ApplyMode = function(onDone, silent)
     GroupRoster(function()
         NS.boardReady = true
         NS.ApplyTrackingAll()   -- the raid is formed: tracking on for those who have it set
+        -- the raid is formed: every bot is checked (talents, ...), one after another so the whispers do not pile up
+        do
+            local n = 0
+            for _, k in ipairs(NS.rosterOrder) do
+                local e = NS.bots[k]
+                if e then
+                    NS.After(3 + n * NS.STAGGER_DELAY, function() NS.BotCheckup(e, "raid formed") end)
+                    n = n + 1
+                end
+            end
+        end
         if mode ~= NS.lastAppliedMode then
             ApplyStrategyForMode(mode, NS.lastAppliedMode)
             NS.lastAppliedMode = mode
@@ -3320,7 +3331,11 @@ NS.RefreshBotLevelsAndClasses = function()
         if not entry then return end
         local _, class = UnitClass(unit)
         entry.class = class or entry.class
-        entry.level = UnitLevel(unit) or entry.level
+        local newLevel = UnitLevel(unit)
+        local gained = newLevel and entry.level and newLevel > entry.level
+        if gained then entry.levelFrom = entry.level end   -- where it came from (NS.StartBotTalents needs the crossing of 10)
+        entry.level = newLevel or entry.level
+        if gained then NS.BotCheckup(entry, "level up") end
     end)
     if NS.RefreshPanel then NS.RefreshPanel() end
     -- Also catch up any open armory windows' unit token/model — display-only
@@ -7179,24 +7194,26 @@ NS.RegisterCheckup = function(class, handler)
     table.insert(NS.CHECKUPS[class], handler)
 end
 
-NS.CHECKUP_EVENTS = { "mode change", "bags dropped", "revived", "items refreshed" }   -- the flat list of events
+NS.CHECKUP_EVENTS = { "mode change", "bags dropped", "revived", "items refreshed", "level up", "raid formed" }   -- the flat list of events
 
---- Runs the handlers registered for the bot's class that listen to `event`.
+--- Runs the handlers that listen to `event`: those registered for the bot's class and those registered for "*" (every
+--- class).
 NS.BotCheckup = function(entry, event)
-    if not entry or not entry.class then return end
-    local handlers = NS.CHECKUPS[entry.class]
-    if not handlers or NS.EffectiveMode() == NS.MODE_SOLO then return end
+    if not entry then return end
+    if NS.EffectiveMode() == NS.MODE_SOLO then return end
     if NS.BotInCombat(entry.name) then return end
     local key = strlower(entry.name)
     local now = GetTime()
     entry.checkupAt = entry.checkupAt or {}
-    for _, h in ipairs(handlers) do
-        local rule = h.on[event]
-        if rule then
-            local last = entry.checkupAt[h.name]
-            if rule == true or not last or now - last >= rule then
-                entry.checkupAt[h.name] = now
-                h.run(entry, key, event)
+    for _, group in ipairs({ entry.class or "", "*" }) do
+        for _, h in ipairs(NS.CHECKUPS[group] or {}) do
+            local rule = h.on[event]
+            if rule then
+                local last = entry.checkupAt[h.name]
+                if rule == true or not last or now - last >= rule then
+                    entry.checkupAt[h.name] = now
+                    h.run(entry, key, event)
+                end
             end
         end
     end
@@ -7230,6 +7247,399 @@ NS.RegisterCheckup("ROGUE", {
             NS.After(4, function() SendBotCommand(entry.name, "u " .. CleanItemLink(second)) end)
         end
     end,
+})
+
+-- Talents on level-up (per explicit user direction, done in the addon so it works on every server): the server only
+-- spends talent points on its own at a level-up for RANDOM bots, never for the player's alt-bots, so every tracked bot
+-- is told what to learn once for each new level from 10 up (the first talent point). The level it was last told for
+-- is remembered account-wide (AltBot_SavedVars.talentsLevel), so a level gained while the addon was off is caught up
+-- once as well, and nothing is sent twice. Both talent commands make the bot reset its strategies to the defaults, so
+-- what AltBot had set (the farming strategy, follow/stay, the combat reaction) is put back right after it.
+--
+-- WHAT it learns (per explicit user direction: the alt-bots level to 80 in fighting, strictly agreed trees - priest
+-- Shadow, rogue Combat and so on - and the PLAYER decides, e.g., whether the mage is Fire or Frost: the "Talents" tab of
+-- the settings window has a dropdown with the specializations of every class). Each specialization carries Wowhead
+-- talent-calculator links (the part after the class in https://www.wowhead.com/wotlk/talent-calc/<slug>/<string>), taken
+-- from the premade specs of mod-playerbots (PvE and PvP), one per milestone level. "talents apply <string>" takes ONLY the digit
+-- string (a full URL is cut at its dashes), resets the talents for free and learns them again main tree first, top to
+-- bottom, until the points run out - so at each level the NEAREST link at or above the bot's level is used (a level 30
+-- bot gets the "60" link, a level 62 one the "80" link). The choice is AltBot_SavedVars.talentSpec[CLASS] = label.
+NS.TALENT_CLASS_ORDER = { "WARRIOR", "PALADIN", "HUNTER", "ROGUE", "PRIEST", "DEATHKNIGHT", "SHAMAN", "MAGE", "WARLOCK", "DRUID" }
+NS.TALENT_NONE = "Server default"   -- the entry that clears a class choice: nothing is sent
+NS.TALENT_SPECS = {
+    WARRIOR = { slug = "warrior", specs = {
+        { label = "Arms", name = "arms pve", links = { [60] = "3022032023335100002012211231241", [80] = "3022032023335100102012213231251-305-2033" } },
+        { label = "Fury", name = "fury pve", links = { [60] = "-305053000500310053120501351", [80] = "32002300233-305053000500310153120511351" } },
+        { label = "Protection", name = "prot pve", links = { [60] = "--053351225000210521030113321", [80] = "3500030023-301-053351225000210521030113321" } },
+        { label = "Arms (PvP)", name = "arms pvp", links = { [60] = "0320232023331100032212012221251", [80] = "0320332023335100232212013231251-3250001" } },
+        { label = "Fury (PvP)", name = "fury pvp", links = { [60] = "-325000131500212250120511351", [80] = "03220300233-325000131500212250122511351" } },
+        { label = "Protection (PvP)", name = "prot pvp", links = { [60] = "--250031220223012520332113321", [80] = "0502300123-3-250031220223012521332113321" } },
+    } },
+    PALADIN = { slug = "paladin", specs = {
+        { label = "Holy", name = "holy pve", links = { [60] = "50350151020013053100515221", [80] = "50350152100013053100515221-50320104203" } },
+        { label = "Protection", name = "prot pve", links = { [60] = "-05005135203102311333112321", [80] = "-05005135203102311333312321-502302012003" } },
+        { label = "Retribution", name = "ret pve", links = { [60] = "--05230051203331302133231131", [65] = "-05-05230051203331302133231131", [80] = "050501-05-05232051203331302133231331" } },
+        { label = "Holy (PvP)", name = "holy pvp", links = { [60] = "50332150300013050133215221", [80] = "50332150300013050133315221-5032013122" } },
+        { label = "Protection (PvP)", name = "prot pvp", links = { [60] = "-15320130223122311323311321", [80] = "-15320130223122321333312321-052300502" } },
+        { label = "Retribution (PvP)", name = "ret pvp", links = { [60] = "--05230250203331222133201321", [80] = "-1532013022-05230250203331322133201321" } },
+    } },
+    HUNTER = { slug = "hunter", specs = {
+        { label = "Beast Mastery", name = "bm pve", links = { [40] = "512002015051122301", [60] = "51200201505112233110531151", [80] = "51200201505112233111531351-0323031-5" } },
+        { label = "Marksmanship", name = "mm pve", links = { [60] = "-035305101030013233115031151", [80] = "502-035305101230013233135031351-5000002" } },
+        { label = "Survival", name = "surv pve", links = { [60] = "--5000032500033330502135201311", [80] = "-005305101-5000032500033330532135301321" } },
+        { label = "Beast Mastery (PvP)", name = "bm pvp", links = { [60] = "05203201505012233100531151", [80] = "05203201505012233100531351-005305101-03" } },
+        { label = "Marksmanship (PvP)", name = "mm pvp", links = { [60] = "-034305101030213231135031051", [80] = "-035305101030213233135031051-53013020102" } },
+        { label = "Survival (PvP)", name = "surv pvp", links = { [60] = "--2300302410233030533135001031", [80] = "-005305201-2300302510233330533135001031" } },
+    } },
+    ROGUE = { slug = "rogue", specs = {
+        { label = "Assassination", name = "as pve", links = { [60] = "005303104352100520103331051", [80] = "005303005352100520103331051-005005003-502" } },
+        { label = "Combat", name = "combat pve", links = { [60] = "-0252051000035015223100501251", [80] = "00532000523-0252051000035015223100501251" } },
+        { label = "Subtlety", name = "subtlety pve", links = { [60] = "--5022012030321121350115031151", [80] = "30532010114--5022012030321121350115031151" } },
+        { label = "Assassination (PvP)", name = "as pvp", links = { [60] = "005303103342102522103031--50002", [80] = "005303103342102522103031-004-532023203000012" } },
+        { label = "Combat (PvP)", name = "combat pvp", links = { [60] = "-3250002050225010223102321251", [80] = "305120105-3250002050235010223102521251" } },
+        { label = "Subtlety (PvP)", name = "subtlety pvp", links = { [60] = "--5120212030320121330133221251", [80] = "3023031-3-5120212030320121350135231251" } },
+    } },
+    PRIEST = { slug = "priest", specs = {
+        { label = "Discipline", name = "disc pve", links = { [60] = "0503203130300512301323131051", [80] = "0503203130300512331323231251-03520103" } },
+        { label = "Holy", name = "holy pve", links = { [60] = "-035050031301152530000331331", [80] = "05032031-235050032302152530000331351" } },
+        { label = "Shadow", name = "shadow pve", links = { [60] = "--325003041203010323150301351", [80] = "0503203--325023051223010323152301351" } },
+        { label = "Discipline (PvP)", name = "disc pvp", links = { [60] = "5003203130320512201323031051", [80] = "5003203130322512331013231151-23050113" } },
+        { label = "Holy (PvP)", name = "holy pvp", links = { [60] = "-235501031000152430320031151", [80] = "500320313-235501031000152530320031351" } },
+        { label = "Shadow (PvP)", name = "shadow pvp", links = { [60] = "--005323241223112003102311351", [80] = "50332031003--005323241223112003102311351" } },
+    } },
+    DEATHKNIGHT = { slug = "death-knight", specs = {
+        { label = "Blood", name = "blood pve", links = { [60] = "035502150300331320102013111-005", [80] = "0055021533303310201020131-305020510002-00522" } },
+        { label = "Frost", name = "frost pve", links = { [60] = "-32003350332203012300023101351", [80] = "-32002350352203012300033101351-230200305003" } },
+        { label = "Unholy", name = "unholy pve", links = { [60] = "--2301303050032151000150013131151", [80] = "23050202--2302303350032152000150003133151" } },
+        { label = "Blood (double aura)", name = "double aura blood pve", links = { [60] = "005512153330030320102013-305", [80] = "005512153330030320102013-3050505002023001-002" } },
+        { label = "Blood (PvP)", name = "blood pvp", links = { [60] = "2305021503003313201222101351", [80] = "2305021503003313201222101351--032232300023" } },
+        { label = "Frost (PvP)", name = "frost pvp", links = { [60] = "-32015351022203012001233101251", [80] = "0055-32015351052203012001233131351-03" } },
+        { label = "Unholy (PvP)", name = "unholy pvp", links = { [60] = "--2301323301002152230101203103151", [80] = "-320050410002-2301323301002152230101203133151" } },
+    } },
+    SHAMAN = { slug = "shaman", specs = {
+        { label = "Elemental", name = "ele pve", links = { [60] = "4530001520213351102301351", [80] = "4530001523213351302301351-00525003" } },
+        { label = "Enhancement", name = "enh pve", links = { [60] = "-30305003105021333031121131051", [80] = "053030152-30305003105021333031131131051" } },
+        { label = "Restoration", name = "resto pve", links = { [60] = "--50005301235310501102321251", [80] = "-00502033-50005331335310501122331251" } },
+        { label = "Elemental (PvP)", name = "ele pvp", links = { [60] = "0533001503213051322301341", [80] = "0533051503213051322331351-023212001" } },
+        { label = "Enhancement (PvP)", name = "enh pvp", links = { [60] = "-02305203105001333201131131151", [80] = "0503351-02305203105001333211131231251" } },
+        { label = "Restoration (PvP)", name = "resto pvp", links = { [60] = "--05032331331013501120321251", [80] = "-023222301004-05032331331013501120331251" } },
+    } },
+    MAGE = { slug = "mage", specs = {
+        { label = "Arcane", name = "arcane pve", links = { [60] = "230005231100330150323102500321", [80] = "230005231100330150323102505321-03-203303001" } },
+        { label = "Fire", name = "fire pve", links = { [60] = "-0055030011302231053120321341", [80] = "23000503110003-0055032012303330053120300351" } },
+        { label = "Frost", name = "frost pve", links = { [60] = "--0533030313203100030152231151", [80] = "23002303110003--0533030313203100030152231351" } },
+        { label = "Frostfire", name = "frostfire pve", links = { [60] = "-2305032012303331053120300051", [80] = "-2305032012303331053120321351-023302031" } },
+        { label = "Arcane (PvP)", name = "arcane pvp", links = { [60] = "205323200122032103303102015221", [80] = "205323200122032103303102015321-23002-303020301" } },
+        { label = "Fire (PvP)", name = "fire pvp", links = { [60] = "-2305202312020031223122301351", [80] = "230321030122-2305212312020031223122301351" } },
+        { label = "Frost (PvP)", name = "frost pvp", links = { [60] = "--3533203210203100232102231151", [80] = "23032103010203--3533203210203100232102231151" } },
+    } },
+    WARLOCK = { slug = "warlock", specs = {
+        { label = "Affliction", name = "affli pve", links = { [60] = "2350022001113510053500131151", [70] = "2350022001113510053500131151--55", [80] = "2350022001123510253500331151--55000005" } },
+        { label = "Demonology", name = "demo pve", links = { [60] = "-003203301135112530135201051", [70] = "-003203301135112530135201051-55", [80] = "-003203301135112530135221351-55000005" } },
+        { label = "Destruction", name = "destro pve", links = { [60] = "--05203215200231051305031151", [80] = "23-0302-05203215220331051335231351" } },
+        { label = "Affliction (PvP)", name = "affli pvp", links = { [60] = "0350002231223011053502301151", [80] = "2350002231223111053502301151-2032003011302" } },
+        { label = "Demonology (PvP)", name = "demo pvp", links = { [60] = "-003203301135202530135001251", [80] = "-003203301135202530135011351-052300152" } },
+        { label = "Destruction (PvP)", name = "destro pvp", links = { [60] = "--05230015220331351005031051", [80] = "-2032003311302-05230015220331351005031051" } },
+    } },
+    DRUID = { slug = "druid", specs = {
+        { label = "Balance", name = "balance pve", links = { [60] = "5032003125031003213304301231", [80] = "5032003125331303213305301231--205003012" } },
+        { label = "Feral (bear)", name = "bear pve", links = { [60] = "-503232132322010303120300013501", [80] = "-503232132322010353120303013511-20350001" } },
+        { label = "Restoration", name = "resto pve", links = { [60] = "--230033312031502331050313031", [80] = "05320031--230033312031502431053313051" } },
+        { label = "Feral (cat)", name = "cat pve", links = { [60] = "-552202032322010053100030310501", [80] = "-553202032322010053120030310511-203503012" } },
+        { label = "Balance (PvP)", name = "balance pvp", links = { [60] = "5012203115331002213032311231", [80] = "5022203125331003213035311231--230033012" } },
+        { label = "Feral (cat) (PvP)", name = "cat pvp", links = { [60] = "-513202032322010053103030310501", [80] = "-523202032322010053103030310511-205503012" } },
+        { label = "Restoration (PvP)", name = "resto pvp", links = { [60] = "--230033312031500511350013051", [80] = "05320021--230033312031500531353013251" } },
+    } },
+}
+-- No default of ours (per explicit user direction): while the player has chosen nothing, the server's own behaviour stays
+-- as it is and the addon sends no talent command at all.
+
+--- The label of the specialization chosen for a class in the Talents tab, or nil = nothing chosen.
+NS.TalentChoice = function(class)
+    return AltBot_SavedVars and AltBot_SavedVars.talentSpec and AltBot_SavedVars.talentSpec[class]
+end
+
+--- The specialization chosen for ONE bot in its "Spellbook&&Spec" window: a name exactly as the server's "talents spec
+--- list" prints it, or nil = nothing chosen for this bot.
+NS.BotTalentChoice = function(key)
+    return AltBot_SavedVars and AltBot_SavedVars.botTalentSpec and AltBot_SavedVars.botTalentSpec[key]
+end
+
+--- The Wowhead link string of a specialization for a bot of `level`: the nearest milestone at or above the level (a
+--- level 30 bot gets the "60" link, a level 62 one the "80" link), the highest one when there is none above.
+NS.TalentLinkFor = function(spec, level)
+    local best, bestLevel, top, topLevel
+    for lv, link in pairs(spec.links) do
+        if lv >= level and (not bestLevel or lv < bestLevel) then best, bestLevel = link, lv end
+        if not topLevel or lv > topLevel then top, topLevel = link, lv end
+    end
+    return best or top
+end
+
+--- The specialization chosen for `entry` itself (a name from the server's "talents spec list", kept in
+--- AltBot_SavedVars.botTalentSpec). Returns the row of NS.TALENT_SPECS, or nil with the server's name when the choice is
+--- a name that is not in our table, or just nil when the bot has no choice of its own. The class setting of the Talents
+--- tab is NOT consulted here: it only decides where a bot's FIRST talent point goes (NS.StartBotTalents), after that the
+--- bot has its own choice and a later change of the class setting does not touch it.
+NS.ChosenTalentSpec = function(entry)
+    local data = NS.TALENT_SPECS[entry.class or ""]
+    local per = NS.BotTalentChoice(strlower(entry.name))
+    if not per then return nil end
+    for _, sp in ipairs(data and data.specs or {}) do
+        if sp.name == per then return sp end
+    end
+    return nil, per
+end
+
+--- The starting specialization of a class (the Talents tab), as a row of NS.TALENT_SPECS, or nil = nothing chosen.
+NS.StartingTalentSpec = function(class)
+    local data = NS.TALENT_SPECS[class or ""]
+    local label = NS.TalentChoice(class or "")
+    if not data or not label then return nil end
+    for _, sp in ipairs(data.specs) do
+        if sp.label == label then return sp end
+    end
+    return nil
+end
+
+--- The command that gives `entry` its talents at a level-up, or nil when the player has chosen nothing (the server's
+--- default stays): "talents apply <link>", where the link is that of the specialization chosen for this very bot in its
+--- Spellbook&&Spec window, else of the one chosen for its class in the Talents tab. A bot-level choice is a name the
+--- server printed in "talents spec list"; its link is looked up in our table by that name, and a name that is not in the
+--- table (a server with its own premade specs) is sent as "talents spec <name>" instead.
+NS.TalentCommand = function(entry)
+    local spec, serverName = NS.ChosenTalentSpec(entry)
+    if spec then return "talents apply " .. NS.TalentLinkFor(spec, entry.level or 80) end
+    if serverName then return "talents spec " .. serverName end
+    return nil
+end
+
+--- How `points` talent points are spread over the three trees when a link string is applied the way the server does it
+--- ("talents apply": the tree with the most talents first, each tree top to bottom, until the points run out).
+--- Returns { tree1, tree2, tree3 }. (The talent prerequisites are not modelled, so it is an expectation, not a promise.)
+NS.ExpectedTalentDistribution = function(link, points)
+    local trees = {}
+    for i = 1, 3 do trees[i] = { index = i, ranks = {}, count = 0 } end
+    local i = 0
+    for part in (link .. "-"):gmatch("(.-)%-") do
+        i = i + 1
+        if i > 3 then break end
+        for d in part:gmatch("%d") do
+            local r = tonumber(d)
+            if r > 0 then
+                local t = trees[i]
+                t.ranks[#t.ranks + 1] = r
+                t.count = t.count + 1
+            end
+        end
+    end
+    table.sort(trees, function(a, b)
+        if a.count ~= b.count then return a.count > b.count end
+        return a.index < b.index
+    end)
+    local out, left = { 0, 0, 0 }, points
+    for _, t in ipairs(trees) do
+        for _, r in ipairs(t.ranks) do
+            if left <= 0 then break end
+            local take = math.min(r, left)
+            out[t.index] = out[t.index] + take
+            left = left - take
+        end
+    end
+    return out
+end
+
+--- Whether the talents the bot reports ("a/b/c" from its "who" reply) are those of `spec` for `level`: the same main tree
+--- and every available point spent (level - 9 points from level 10).
+NS.TalentsMatchSpec = function(whoTalents, spec, level)
+    local a, b, c = tostring(whoTalents):match("(%d+)/(%d+)/(%d+)")
+    if not a then return nil end
+    local have = { tonumber(a), tonumber(b), tonumber(c) }
+    local points = level - (NS.TALENTS_FROM_LEVEL - 1)
+    if points <= 0 then return true end
+    local want = NS.ExpectedTalentDistribution(NS.TalentLinkFor(spec, level), points)
+    local function mainTree(t)
+        local bi = 1
+        for i = 2, 3 do if t[i] > t[bi] then bi = i end end
+        return bi
+    end
+    local spent = have[1] + have[2] + have[3]
+    return mainTree(have) == mainTree(want) and spent >= points
+end
+
+--- The Wowhead URL of a specialization at its highest milestone (for the tooltip of the dropdown).
+NS.TalentWowheadUrl = function(class, label)
+    local data = NS.TALENT_SPECS[class]
+    if not data then return nil end
+    for _, sp in ipairs(data.specs) do
+        if sp.label == label then
+            local topLevel
+            for lv in pairs(sp.links) do
+                if not topLevel or lv > topLevel then topLevel = lv end
+            end
+            return "https://www.wowhead.com/wotlk/talent-calc/" .. data.slug .. "/" .. sp.links[topLevel]
+        end
+    end
+    return nil
+end
+
+-- (A change of the class setting in the Talents tab is not applied to any bot: it is only the starting specialization
+-- for bots that have no talents yet, see NS.StartBotTalents.)
+
+--- The player changed the choice of ONE bot (its Spellbook&&Spec window): it gets its talents right away.
+NS.BotTalentChanged = function(key)
+    local entry = NS.bots[key]
+    if not entry then return end
+    AltBot_SavedVars.talentsLevel = AltBot_SavedVars.talentsLevel or {}
+    AltBot_SavedVars.talentsLevel[key] = nil
+    NS.BotCheckup(entry, "level up")
+end
+
+-- The specializations the SERVER offers a bot (its reply to "talents spec list": "1. bm pve (54-12-5)" ... "Total 6
+-- specs found"): key -> { { name = "bm pve", trees = "54-12-5" }, ... }, kept account-wide like the spell lists.
+NS.botSpecList = {}
+
+--- The spec list of a bot: the one in memory, else the saved one, else an empty list.
+NS.SpecListOf = function(key)
+    return NS.botSpecList[key] or (AltBot_SavedVars and AltBot_SavedVars.specList and AltBot_SavedVars.specList[key]) or {}
+end
+NS.TALENTS_FROM_LEVEL = 10
+NS.RestoreStrategySteps = function(entry)
+    local steps = {}
+    if NS.BotFarming(entry) then
+        steps[#steps + 1] = NS.FarmStrategyStep()
+    elseif AltBot_SavedVars.mode == NS.MODE_QUEST then
+        for _, st in ipairs(NS.SavedStanceSteps()) do steps[#steps + 1] = st end
+    end
+    return steps
+end
+
+NS.RegisterCheckup("*", {
+    name = "talents",
+    on = { ["level up"] = true, ["items refreshed"] = 60 },   -- (only for a bot that has a choice of its own)
+    run = function(entry, key, event)
+        if AltBot_SavedVars.autoTalents == false then return end   -- the settings checkbox "auto talents"
+        local level = entry.level
+        if not level or level < NS.TALENTS_FROM_LEVEL then return end
+        local command = NS.TalentCommand(entry)
+        if not command then return end   -- nothing chosen for this bot or its class: the server's default stays
+        AltBot_SavedVars.talentsLevel = AltBot_SavedVars.talentsLevel or {}
+        if (AltBot_SavedVars.talentsLevel[key] or 0) >= level then return end
+        AltBot_SavedVars.talentsLevel[key] = level
+        NS.Trace("checkup", string.format("%s (%s): %s at level %d", entry.name, event, command, level))
+        local steps = { { cmd = command, wait = 1.5 } }
+        for _, st in ipairs(NS.RestoreStrategySteps(entry)) do steps[#steps + 1] = st end
+        NS.SendBotChain(entry.name, steps, {
+            key = "talents",
+            onFail = ChainFailPrinter and ChainFailPrinter(entry) or nil,
+            onDone = function()
+                NS.After(4, function() NS.VerifyBotTalents(entry, event, 1) end)   -- did the command work?
+            end,
+        })
+    end,
+})
+
+-- Talents VERIFICATION (per explicit user direction: the check-up must test both the points and the tree, "вдруг при смене
+-- специализации в форме команда talents apply <link> не отработала"): the bot is asked "who", and the talents it reports
+-- ("a/b/c") are compared with the specialization chosen for it - the same main tree and every available point spent
+-- (level - 9). On a mismatch "talents apply <link>" is sent AGAIN, the strategies are put back, and the check is repeated
+-- a few seconds later, up to NS.TALENT_VERIFY_TRIES times; after that the bot is named in the chat (it cannot be made to
+-- match, e.g. its trainer is missing or the build needs points it does not have). Runs when the raid is formed and after
+-- every talents command AltBot itself sent (a level-up, a change of the choice in the window).
+NS.TALENT_VERIFY_TRIES = 3
+NS.VerifyBotTalents = function(entry, why, attempt)
+    if AltBot_SavedVars.autoTalents == false then return end
+    local level = entry.level
+    if not level or level < NS.TALENTS_FROM_LEVEL then return end
+    local spec = NS.ChosenTalentSpec(entry)
+    if not spec then return end   -- nothing chosen (the server's default stays) or a name that is not in our table
+    local key = strlower(entry.name)
+    local who, sent = nil, false
+    NS.SendBotChain(entry.name, {
+        { cmd = "who", wait = "reply", timeout = 4,
+          reply = function(msg)
+              local w = NS.ParseWhoReply(msg)
+              if w then who = w return true end
+              return false
+          end },
+        { cmd = function()
+              if not who or not who.talents then return nil end
+              if NS.TalentsMatchSpec(who.talents, spec, level) ~= false then return nil end   -- matches (or unknown)
+              if attempt > NS.TALENT_VERIFY_TRIES then
+                  NS.SystemShout(entry.name, string.format("talents %s still do not match %s after %d attempts",
+                      who.talents, spec.label, NS.TALENT_VERIFY_TRIES))
+                  return nil
+              end
+              local command = NS.TalentCommand(entry)
+              if not command then return nil end
+              Print(string.format("%s: talents %s differ from the chosen specialization (%s), %s (try %d)", entry.name,
+                  who.talents, spec.label, command, attempt), "init")
+              NS.Trace("checkup", string.format("%s (%s): talents %s != chosen, %s (try %d)", entry.name, why,
+                  who.talents, command, attempt))
+              AltBot_SavedVars.talentsLevel = AltBot_SavedVars.talentsLevel or {}
+              AltBot_SavedVars.talentsLevel[key] = level
+              sent = true
+              return command
+          end, wait = 1.5 },
+    }, {
+        key = "talents-verify",
+        onDone = function()
+            if not sent then return end
+            local steps = NS.RestoreStrategySteps(entry)
+            if #steps > 0 then
+                NS.SendBotChain(entry.name, steps, { onFail = ChainFailPrinter and ChainFailPrinter(entry) or nil })
+            end
+            NS.After(4, function() NS.VerifyBotTalents(entry, why, attempt + 1) end)   -- did it work this time?
+        end,
+    })
+end
+
+NS.RegisterCheckup("*", {
+    name = "talents-verify",
+    on = { ["raid formed"] = 600 },   -- at most once in 10 minutes per bot
+    run = function(entry, key, event) NS.VerifyBotTalents(entry, event, 1) end,
+})
+
+-- STARTING specialization (per explicit user direction: the Talents tab "is where the first talent point goes and nothing
+-- more", and "existing bots of level 10 and more are not touched": changing the class setting from Elemental to
+-- Enhancement does not turn the existing shamans into Enhancement, only a shaman that REACHES level 10 gets it). The
+-- moment is the level-up that takes a bot from below level 10 to level 10 or more (entry.levelFrom is the level it came
+-- from). A bot without a choice of its own whose class has a starting specialization gets that specialization as ITS OWN
+-- choice (botTalentSpec) and "talents apply <link>"; from then on it is an ordinary bot with a choice (applied at every
+-- level-up, verified) and the class setting no longer matters for it.
+NS.StartBotTalents = function(entry, event)
+    if AltBot_SavedVars.autoTalents == false then return end
+    local level, from = entry.level, entry.levelFrom
+    if not level or not from then return end
+    if from >= NS.TALENTS_FROM_LEVEL or level < NS.TALENTS_FROM_LEVEL then return end   -- not the crossing of level 10
+    local key = strlower(entry.name)
+    if NS.BotTalentChoice(key) then return end
+    local spec = NS.StartingTalentSpec(entry.class)
+    if not spec then return end   -- no starting specialization for this class: the server's default stays
+    AltBot_SavedVars.botTalentSpec = AltBot_SavedVars.botTalentSpec or {}
+    AltBot_SavedVars.botTalentSpec[key] = spec.name
+    -- this level is done: the ordinary level-up handler of the same event must not send the command a second time
+    AltBot_SavedVars.talentsLevel = AltBot_SavedVars.talentsLevel or {}
+    AltBot_SavedVars.talentsLevel[key] = level
+    local command = NS.TalentCommand(entry)
+    if not command then return end
+    Print(string.format("%s reached level %d: starting specialization %s (%s)", entry.name, level, spec.label, command), "init")
+    NS.Trace("checkup", string.format("%s (%s): starting specialization %s, %s", entry.name, event, spec.name, command))
+    local steps = { { cmd = command, wait = 1.5 } }
+    for _, st in ipairs(NS.RestoreStrategySteps(entry)) do steps[#steps + 1] = st end
+    NS.SendBotChain(entry.name, steps, {
+        key = "talents",
+        onFail = ChainFailPrinter and ChainFailPrinter(entry) or nil,
+        onDone = function()
+            NS.After(4, function() NS.VerifyBotTalents(entry, event, 1) end)   -- did the command work?
+        end,
+    })
+end
+
+NS.RegisterCheckup("*", {
+    name = "talents-start",
+    on = { ["level up"] = true },
+    run = function(entry, key, event) NS.StartBotTalents(entry, event) end,
 })
 
 --- A chain step that runs the check-up (it sends its own commands, so the step itself sends nothing).
@@ -12405,6 +12815,8 @@ NS.SaveSpellCache = function(key, list)
 end
 
 NS.LoadSpellCache = function(key)
+    local savedSpecs = AltBot_SavedVars and AltBot_SavedVars.specList and AltBot_SavedVars.specList[key]
+    if savedSpecs and not NS.botSpecList[key] then NS.botSpecList[key] = savedSpecs end
     local saved = AltBot_SavedVars and AltBot_SavedVars.spellCache and AltBot_SavedVars.spellCache[key]
     if not saved then return end
     local list = {}
@@ -12479,9 +12891,10 @@ NS.ApplyTrackingAll = function()
 end
 
 NS.FetchBotSpells = function(botName)
-    NS.spellAwaiting[strlower(botName)] = { list = {}, seen = {}, raw = {}, timer = 0 }
+    NS.spellAwaiting[strlower(botName)] = { list = {}, seen = {}, raw = {}, specs = {}, timer = 0 }
     NS.spellHideUntil[strlower(botName)] = GetTime() + NS.STATS_TIMEOUT + 1
     SendBotCommand(botName, "spells")
+    SendBotCommand(botName, "talents spec list")   -- the specializations of the dropdown on top of the window
 end
 
 NS.spellWatcher = CreateFrame("Frame")
@@ -12491,6 +12904,15 @@ NS.spellWatcher:SetScript("OnEvent", function(self, event, msg, sender)
     local c = NS.spellAwaiting[key]
     if not c then return end
     local found = false
+    -- a line of the answer to "talents spec list": "1. bm pve (54-12-5)" or the closing "Total 6 specs found"
+    local clean = NS.CleanEscapes(msg)
+    local _, specName, t1, t2, t3 = clean:match("^%s*(%d+)%.%s+(.-)%s+%((%d+)%-(%d+)%-(%d+)%)%s*$")
+    if specName then
+        c.specs[#c.specs + 1] = { name = specName, trees = t1 .. "-" .. t2 .. "-" .. t3 }
+        found = true
+    elseif clean:match("^%s*Total %d+ specs found") then
+        found = true
+    end
     for idText, name in msg:gmatch("|Hspell:(%d+)[^|]*|h%[(.-)%]|h") do
         found = true
         local id = tonumber(idText) or 0
@@ -12530,8 +12952,15 @@ NS.spellTicker:SetScript("OnUpdate", function(self, dt)
             local e = NS.bots[key]
             if e then NS.ApplyTracking(e) end   -- the list was what the tracking was waiting for
         end
+        if c.specs and #c.specs > 0 then
+            NS.botSpecList[key] = c.specs
+            AltBot_SavedVars.specList = AltBot_SavedVars.specList or {}
+            AltBot_SavedVars.specList[key] = c.specs
+        end
         NS.botSpellRaw[key] = c.raw
         NS.PaintSpellbook(key)
+        local sf = NS.botSpellFrames[key]
+        if sf and sf.RefreshSpec then sf.RefreshSpec() end
     end
 end)
 
@@ -12685,14 +13114,61 @@ NS.GetSpellFrame = function(botName)
 
     f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     f.title:SetPoint("TOP", f, "TOP", 0, -16)
-    f.title:SetText(botName .. "'s Spellbook")
+    f.title:SetText(botName .. "'s Spellbook&&Spec")
     local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
     closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -4, -4)
     closeBtn:SetScript("OnClick", function() f:Hide() end)
 
+    -- The first line (per explicit user direction): the specialization of THIS bot. The entries are exactly the ones the
+    -- server itself offers ("talents spec list"); nothing chosen = the server's default. (The class setting of the
+    -- Talents tab only fills this choice in once, when the bot gets its first talent point.)
+    local specLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    specLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 20, -46)
+    specLabel:SetText("Spec:")
+    local dd = CreateFrame("Frame", "AltBotSpecDD_" .. key, f, "UIDropDownMenuTemplate")
+    dd:SetPoint("TOPLEFT", f, "TOPLEFT", 52, -36)
+    UIDropDownMenu_SetWidth(dd, 235)
+    local function noChoiceText()
+        return NS.TALENT_NONE   -- nothing chosen for this bot: the server's default (the class setting is only a start)
+    end
+    local function treesOf(name)
+        for _, sp in ipairs(NS.SpecListOf(key)) do
+            if sp.name == name then return sp.trees end
+        end
+    end
+    f.RefreshSpec = function()
+        local per = NS.BotTalentChoice(key)
+        local text = noChoiceText()
+        if per then
+            local trees = treesOf(per)
+            text = per .. (trees and (" (" .. trees .. ")") or "")
+        end
+        UIDropDownMenu_SetText(dd, text)
+    end
+    UIDropDownMenu_Initialize(dd, function()
+        local per = NS.BotTalentChoice(key)
+        local function add(text, value)
+            local info = UIDropDownMenu_CreateInfo()
+            info.text = text
+            info.checked = (per == value)
+            info.func = function()
+                AltBot_SavedVars.botTalentSpec = AltBot_SavedVars.botTalentSpec or {}
+                AltBot_SavedVars.botTalentSpec[key] = value
+                f.RefreshSpec()
+                CloseDropDownMenus()
+                NS.BotTalentChanged(key)
+            end
+            UIDropDownMenu_AddButton(info)
+        end
+        for _, sp in ipairs(NS.SpecListOf(key)) do
+            add(sp.name .. " (" .. sp.trees .. ")", sp.name)
+        end
+    end)
+    f.specDD = dd
+
     -- A scrolling table: icon | spell link, one group after another.
     f.scroll = CreateFrame("ScrollFrame", "AltBotSpellScroll_" .. key, f, "UIPanelScrollFrameTemplate")
-    f.scroll:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -38)   -- right under the title bar
+    f.scroll:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -70)   -- under the title bar and the spec line
     f.scroll:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -36, 18)
     f.content = CreateFrame("Frame", nil, f.scroll)
     f.content:SetSize(300, 10)
@@ -12834,8 +13310,9 @@ NS.ToggleBotSpellbook = function(botName)
     local key = strlower(botName)
     if not NS.botSpellState[key] then NS.LoadSpellCache(key) end   -- instantly from the saved list
     NS.PaintSpellbook(key)
+    if f.RefreshSpec then f.RefreshSpec() end
     f:Show()
-    NS.FetchBotSpells(botName)   -- and refresh it in the background
+    NS.FetchBotSpells(botName)   -- and refresh it in the background (the spec list with it)
 end
 
 -- ============================================================
@@ -13664,6 +14141,11 @@ local function GetOrCreateSettingsFrame()
     local emotesItem = item("emotes",
         function() return AltBot_SavedVars and AltBot_SavedVars.emotes or false end,
         function(v) AltBot_SavedVars.emotes = v end)
+    -- "auto talents": on a level-up a bot is given the specialization the player chose for it or its class (see the "talents"
+    -- check-up); with nothing chosen nothing is sent. On by default.
+    local talentsItem = item("auto talents",
+        function() return not (AltBot_SavedVars and AltBot_SavedVars.autoTalents == false) end,
+        function(v) AltBot_SavedVars.autoTalents = v end)
     -- "hide gains / icons / names / bags / gold / xp / levels": which rows of the board columns are shown.
     local hideItems = {}
     for _, row in ipairs(NS.HIDE_ROWS) do
@@ -13707,14 +14189,112 @@ local function GetOrCreateSettingsFrame()
     place(danceItem, 1, 0)
     place(emotesItem, 2, 0)
     place(delItem, 3, 0)   -- "delete cache" is always the last of the row
-    y = y + ROW_H + BLOCK_GAP
+    place(talentsItem, 0, 1)
+    y = y + 2 * ROW_H + BLOCK_GAP
     -- block 2: hide
     for n, it in ipairs(hideItems) do place(it, (n - 1) % COLS, math.floor((n - 1) / COLS)) end
     y = y + math.ceil(#hideItems / COLS) * ROW_H + BLOCK_GAP
     -- block 3: chat
     for n, it in ipairs(chatItems) do place(it, (n - 1) % COLS, math.floor((n - 1) / COLS)) end
     y = y + math.ceil(#chatItems / COLS) * ROW_H
-    f:SetHeight(y + 18)
+    local generalHeight = y + 18
+    f:SetHeight(generalHeight)
+
+    -- ── Tabs (per explicit user direction): "General" is everything above, "Talents" is a page with one dropdown of
+    -- specializations per class. The general widgets were created directly on `f`, so they are collected here (all but
+    -- the title and the close button) and shown/hidden together with the page.
+    local keep = { [title] = true, [closeBtn] = true }
+    local generalFrames, generalRegions = {}, {}
+    for _, c in ipairs({ f:GetChildren() }) do
+        if not keep[c] then generalFrames[#generalFrames + 1] = c end
+    end
+    for _, r in ipairs({ f:GetRegions() }) do
+        if not keep[r] then generalRegions[#generalRegions + 1] = r end
+    end
+
+    local TAB_ROW_H, TAB_TOP = 30, 40
+    local talentsPage = CreateFrame("Frame", nil, f)
+    talentsPage:SetPoint("TOPLEFT", f, "TOPLEFT", 16, -TAB_TOP)
+    talentsPage:SetPoint("TOPRIGHT", f, "TOPRIGHT", -16, -TAB_TOP)
+    talentsPage:Hide()
+    local talentsHeight = TAB_TOP + #NS.TALENT_CLASS_ORDER * TAB_ROW_H + 44
+    for n, class in ipairs(NS.TALENT_CLASS_ORDER) do
+        local rowY = -(n - 1) * TAB_ROW_H
+        local color = RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
+        local name = (LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[class]) or class
+        local label = talentsPage:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        label:SetPoint("TOPLEFT", talentsPage, "TOPLEFT", 4, rowY - 8)
+        label:SetText(name)
+        if color then label:SetTextColor(color.r, color.g, color.b) end
+
+        local dd = CreateFrame("Frame", "AltBotTalentDD_" .. class, talentsPage, "UIDropDownMenuTemplate")
+        dd:SetPoint("TOPLEFT", talentsPage, "TOPLEFT", 130, rowY)
+        UIDropDownMenu_SetWidth(dd, 200)
+        local function refresh()
+            UIDropDownMenu_SetText(dd, NS.TalentChoice(class) or NS.TALENT_NONE)
+        end
+        UIDropDownMenu_Initialize(dd, function()
+            local current = NS.TalentChoice(class)
+            local function add(text, value)
+                local info = UIDropDownMenu_CreateInfo()
+                info.text = text
+                info.checked = (current == value)
+                info.func = function()
+                    AltBot_SavedVars.talentSpec = AltBot_SavedVars.talentSpec or {}
+                    AltBot_SavedVars.talentSpec[class] = value
+                    refresh()
+                    CloseDropDownMenus()
+                end
+                UIDropDownMenu_AddButton(info)
+            end
+            for _, sp in ipairs(NS.TALENT_SPECS[class].specs) do add(sp.label, sp.label) end
+            add(NS.TALENT_NONE, nil)
+        end)
+        refresh()
+        -- the Wowhead link of the chosen specialization (it cannot be clicked in the game, so it is shown to be copied)
+        dd:SetScript("OnEnter", function(self)
+            local chosen = NS.TalentChoice(class)
+            local url = chosen and NS.TalentWowheadUrl(class, chosen)
+            if not url then return end
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(chosen, 1, 1, 1)
+            GameTooltip:AddLine(url, 0.8, 0.8, 0.8, true)
+            GameTooltip:Show()
+        end)
+        dd:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    end
+    local note = talentsPage:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    note:SetPoint("TOPLEFT", talentsPage, "TOPLEFT", 4, -(#NS.TALENT_CLASS_ORDER * TAB_ROW_H) - 6)
+    note:SetWidth(COLS * COL_W - 8)
+    note:SetJustifyH("LEFT")
+    note:SetText("The STARTING specialization: where the first talent point (level 10) of a bot goes, nothing more. Bots that already have talents are not touched and a change here does not re-spec anybody; from then on each bot follows its own choice in its Spellbook&&Spec window. Nothing chosen = the server default. \"auto talents\" on the General tab switches it off.")
+
+    local tabButtons = {}
+    local function ShowTab(which)
+        local general = (which == "general")
+        for _, c in ipairs(generalFrames) do if general then c:Show() else c:Hide() end end
+        for _, r in ipairs(generalRegions) do if general then r:Show() else r:Hide() end end
+        if general then talentsPage:Hide() else talentsPage:Show() end
+        f:SetHeight(general and generalHeight or talentsHeight)
+        PanelTemplates_SetTab(f, general and 1 or 2)   -- the selected tab looks "in front"
+        if general and NS.PaintMemChart then NS.PaintMemChart() end
+    end
+    -- The tabs hang under the bottom edge of the window like the native frames' tabs (named <frame>Tab1, <frame>Tab2 as
+    -- PanelTemplates_SetNumTabs expects); the template's own OnClick is replaced by the page switch.
+    for n, def in ipairs({ { "general", "General" }, { "talents", "Talents" } }) do
+        local b = CreateFrame("Button", "AltBotSettingsTab" .. n, f, "CharacterFrameTabButtonTemplate")
+        b:SetID(n)
+        b:SetText(def[2])
+        if n == 1 then
+            b:SetPoint("CENTER", f, "BOTTOMLEFT", 60, -12)
+        else
+            b:SetPoint("LEFT", tabButtons.general, "RIGHT", -16, 0)
+        end
+        b:SetScript("OnClick", function() ShowTab(def[1]) end)
+        tabButtons[def[1]] = b
+    end
+    PanelTemplates_SetNumTabs(f, 2)
+    PanelTemplates_SetTab(f, 1)
 
     f:Hide()
     settingsFrame = f
